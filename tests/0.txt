@@ -1,13 +1,13 @@
-8
-4
-0
-2
-0
-2
+# memsize, gprcnt, initpc, segcnt
+8 4 0 2
+# first seg
+# baseaddr, segsize
+0 2
 li r2 720
 mov r1 r2
-2
-6
+# second seg
+# baseaddr, segsize
+2 6
 1
 2
 3

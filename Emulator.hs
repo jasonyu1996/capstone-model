@@ -463,19 +463,27 @@ execute (State regs mem rt) =
 
 -- IO
 
+getSignificantLine :: IO String
+getSignificantLine =
+    let line = getLine
+    in line >>= (\x -> case x of
+        "" -> getSignificantLine
+        '#' : _ -> getSignificantLine
+        _ -> return x)
 
-readInt :: IO (Int)
-readInt = do
-    getLine >>= (\x -> return (read x :: Int))
+
+readInt :: IO Int
+readInt =
+    getSignificantLine >>= (\x -> return (read x :: Int))
+
+readInts :: IO [Int]
+readInts =
+    getSignificantLine >>= (return . (map (\x -> (read x :: Int))) . words)
 
 -- Format: 
--- size of memory
--- number of GPRs
--- init program counter
--- number of segments
+-- size of memory, number of GPRs, init program counter, number of segments
 -- For each segment:
--- starting address
--- size (number of words)
+-- starting address, size (number of words)
 -- list of words
 -- each word can be a value or an instruction (caps are not loaded)
 
@@ -493,7 +501,7 @@ loadWordAt addr nwords mem = do
     if nwords <= 0 then do
         return mem
     else do
-        line <- getLine
+        line <- getSignificantLine
         w <- if isDigit (head line) then do
             -- data
             return (Value (read line :: Int))
@@ -534,8 +542,9 @@ loadMemory nsegs mem = do
     if nsegs <= 0 then do
         return mem
     else do
-        startAddr <- readInt
-        segSize <- readInt
+        inputs <- readInts
+        startAddr <- return (inputs !! 0)
+        segSize <- return (inputs !! 1)
         memLoaded <- loadWordAt startAddr segSize mem
         loadMemory (nsegs - 1) memLoaded
     
@@ -543,10 +552,11 @@ loadMemory nsegs mem = do
 
 loadState :: IO State
 loadState = do
-    memSize <- readInt
-    gprCount <- readInt
-    initPC <- readInt
-    numSegs <- readInt
+    inputs <- readInts
+    memSize <- return (inputs !! 0)
+    gprCount <- return (inputs !! 1)
+    initPC <- return (inputs !! 2)
+    numSegs <- return (inputs !! 3)
     capPC <- return (Cap {
             capType = TLin,
             capBase = 0,
