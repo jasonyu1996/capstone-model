@@ -244,9 +244,9 @@ execInsn (State regs mem rt) (Call r) =
             pc = getMem mem bi,
             sc = ci,
             ret = co,
-            gprs = getMemRange mem bi gprSize
+            gprs = getMemRange mem (bi + 1) gprSize
         }
-        newMem = setMemRange mem bo (gprs regs)
+        newMem = setMemRange (setMem mem bo (pc regs)) (bo + 1) (gprs regs)
     in
         if (validCap rt ci) && (capType ci) == TSealed &&
             (validCap rt co) && (capType co) == TSealed &&
@@ -387,6 +387,64 @@ execInsn (State regs mem rt) (Li r n) =
     let newRegs = setReg regs r (Value n) in State (incrementPC newRegs) mem rt
 
 
+-- add
+execInsn (State regs mem rt) (Add rd rs) =
+    let n1 = getReg regs rs
+        n2 = getReg regs rd
+        Value v1 = n1
+        Value v2 = n2
+        res = Value (v1 + v2)
+        newRegs = setReg regs rd res
+    in
+        if (isValue n1) && (isValue n2) then
+            State (incrementPC newRegs) mem rt
+        else
+            Error
+
+-- jmp
+execInsn (State regs mem rt) (Jmp r) =
+    let n = getReg regs r
+        Value v = n
+        curPc = getReg regs Pc
+        newPc = curPc { capCursor = v }
+        newRegs = setReg regs Pc newPc
+    in
+        if (isValue n) && (validCap rt curPc) then
+            State newRegs mem rt
+        else
+            Error
+
+-- jnz
+execInsn (State regs mem rt) (Jnz rd rs) =
+    let ns = getReg regs rs
+        nd = getReg regs rd
+        Value vs = ns
+        Value vd = nd
+        curPc = getReg regs Pc
+        newPc = curPc { capCursor = vd }
+        newRegs = if vs == 0 then
+                incrementPC regs
+            else
+                setReg regs Pc newPc
+    in
+        if (isValue ns) && (isValue nd) && (validCap rt curPc) then
+            State newRegs mem rt
+        else
+            Error
+
+-- lt
+execInsn (State regs mem rt) (Lt rd ra rb) =
+    let na = getReg regs ra
+        nb = getReg regs rb
+        Value va = na
+        Value vb = nb
+        res = Value (if va < vb then 1 else 0)
+        newRegs = setReg regs rd res
+    in
+        if (isValue na) && (isValue nb) then
+            State newRegs mem rt
+        else
+            Error
 
 execute :: State -> State
 execute Error = Error
@@ -462,6 +520,10 @@ loadWordAt addr nwords mem = do
                     "shrink" -> Shrink r1 r2 r3
                     "init" -> Init r1
                     "li" -> Li r1 v
+                    "add" -> Add r1 r2
+                    "lt" -> Lt r1 r2 r3
+                    "jnz" -> Jnz r1 r2
+                    "jmp" -> Jmp r1
                     _ -> Mov Pc Pc
                 ))
         memLoaded <- return (setMem mem addr w) 
