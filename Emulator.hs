@@ -140,85 +140,95 @@ setMem (Mem mcontent) n w =
 
 -- Instruction definitions
 
-execMov :: State -> Reg -> Reg -> State
-execMov st rd rs =
-    case st of
-        State regs mem rt -> 
-            State (incrementPC (setReg (setReg regs rd w) rs (moved w))) mem rt
-            where
-                w = getReg regs rs 
-        Error -> Error
+execInsn :: State -> Instruction -> State
+execInsn Error _ = Error
 
-execLd :: State -> Reg -> Reg -> State
-execLd st rd rs =
-    case st of
-        State regs mem rt ->
-            let c = getReg regs rs
-                w = getMem mem (capCursor c)
-            in
-                if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (readableCap c) then
-                    State (setReg regs rd w) (setMem mem (capCursor c) (moved w)) rt
-                else
-                    Error
-        _ -> Error
+-- mov
+execInsn (State regs mem rt) (Mov rd rs) =
+    State (incrementPC (setReg (setReg regs rd w) rs (moved w))) mem rt
+    where
+        w = getReg regs rs 
 
-execSd :: State -> Reg -> Reg -> State
-execSd st rd rs =
-    case st of
-        State regs mem rt ->
-            let c = getReg regs rd
-                w = getReg regs rs
-            in
-                if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (writableCap c) then
-                    State (setReg regs rs (moved w)) (setMem mem (capCursor c) w) rt
-                else
-                    Error
-        _ -> Error
+-- ld
+execInsn (State regs mem rt) (Ld rd rs) =
+    let c = getReg regs rs
+        w = getMem mem (capCursor c)
+    in
+        if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (readableCap c) then
+            State (incrementPC (setReg regs rd w)) (setMem mem (capCursor c) (moved w)) rt
+        else
+            Error
 
-execSeal :: State -> Reg -> State
-execSeal st r = st -- TODO: unimplemented
 
-execCall :: State -> Reg -> State
-execCall st r = st -- TODO: unimplemented
+-- sd
+execInsn (State regs mem rt) (Sd rd rs) =
+    let c = getReg regs rd
+        w = getReg regs rs
+    in
+        if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (writableCap c) then
+            State (incrementPC (setReg regs rs (moved w))) (setMem mem (capCursor c) w) rt
+        else
+            Error
 
-execLin :: State -> Reg -> State
-execLin st r = st -- TODO: unimplemented
+-- seal
+execInsn (State regs mem rt) (Seal r) = (State regs mem rt) -- TODO: unimplemented
 
-execDelin :: State -> Reg -> State
-execDelin st r = st -- TODO: unimplemented
+-- call
+execInsn (State regs mem rt) (Call r) = (State regs mem rt) -- TODO: unimplemented
+
+-- lin
+execInsn (State regs mem rt) (Lin r) = (State regs mem rt) -- TODO: unimplemented
+
+-- delin
+execInsn (State regs mem rt) (Delin r) = (State regs mem rt) -- TODO: unimplemented
                     
-execDrop :: State -> Reg -> State
-execDrop st r = st -- TODO: unimplemented
+-- drop
+execInsn (State regs mem rt) (Drop r) = (State regs mem rt) -- TODO: unimplemented
 
-execMrev :: State -> Reg -> Reg -> State
-execMrev st rd rs = st -- TODO: unimplemented
+-- mrev
+execInsn (State regs mem rt) (Mrev rd rs) = (State regs mem rt) -- TODO: unimplemented
 
-execTighten :: State -> Reg -> Reg -> State
-execTighten st rd rs = st -- TODO: unimplemented
+-- tighten
+execInsn (State regs mem rt) (Tighten rd rs) = (State regs mem rt) -- TODO: unimplemented
 
-execSplit :: State -> Reg -> Reg -> Reg -> State
-execSplit st rd rs rp = st -- TODO: unimplemented
+-- split
+execInsn (State regs mem rt) (Split rd rs rp) = (State regs mem rt) -- TODO: unimplemented
 
-execShrink :: State -> Reg -> Reg -> Reg -> State
-execShrink st rd rs rp = st -- TODO: unimplemented
+-- shrink
+execInsn (State regs mem rt) (Shrink rd rs rp) = (State regs mem rt) -- TODO: unimplemented
 
-execInit :: State -> Reg -> State
-execInit st r = 
-    case st of
-        State regs mem rt ->
-            let c = getReg regs r
+-- init
+execInsn (State regs mem rt) (Init r) = 
+    let c = getReg regs r
+    in
+        if (validCap rt c) && (capType c) == TUninit && (capBase c) == (capEnd c) then
+            State (incrementPC (setReg regs r (c { capType = TLin }))) mem rt
+        else
+            Error
+
+-- li
+execInsn (State regs mem rt) (Li r n) =
+    let newRegs = setReg regs r (Value n) in State (incrementPC newRegs) mem rt
+
+
+
+execute :: State -> State
+execute Error = Error
+execute (State regs mem rt) =
+    let pcCap = getReg regs Pc
+    in
+        if (validCap rt pcCap) && (executableCap pcCap) && (inBoundCap pcCap) then
+            let w = getMem mem (capCursor pcCap)
             in
-                if (validCap rt c) && (capType c) == TUninit && (capBase c) == (capEnd c) then
-                    State (setReg regs r (c { capType = TLin })) mem rt
-                else
-                    Error
-        _ -> Error
+                case w of
+                    Inst insn -> execInsn (State regs mem rt) insn
+                    _ -> Error
+        else
+            Error
 
-execute :: State -> Instruction -> State
-execute st insn =
-    case insn of
-        Mov rd rs -> execMov st rd rs
-        _ -> Error
+
+-- IO
+
 
 readInt :: IO (Int)
 readInt = do
@@ -259,6 +269,7 @@ loadWordAt addr nwords mem = do
             r1 <- return (stringToReg (tokens !! 1))
             r2 <- return (stringToReg (tokens !! 2))
             r3 <- return (stringToReg (tokens !! 3))
+            v <- return (read (tokens !! 2) :: Int)
             return (Inst (
                 case (head tokens) of
                     "mov" -> Mov r1 r2
@@ -274,6 +285,7 @@ loadWordAt addr nwords mem = do
                     "split" -> Split r1 r2 r3
                     "shrink" -> Shrink r1 r2 r3
                     "init" -> Init r1
+                    "li" -> Li r1 v
                     _ -> Mov Pc Pc
                 ))
         memLoaded <- return (setMem mem addr w) 
@@ -315,9 +327,17 @@ loadState = do
     let rt = RevTree [RevNodeRoot]
     return (State regs mem rt)
 
+execLoop :: Int -> State -> IO ()
+execLoop _ Error = return ()
+execLoop timestamp st = do
+    let newState = execute st
+    putStrLn ((show timestamp) ++ ": " ++ (show newState))
+    execLoop (timestamp + 1) newState
+
 main :: IO ()
 
 main = do
     state <- loadState
-    putStrLn (show state)
+    putStrLn ("Initial state: " ++ (show state))
+    execLoop 1 state
 
