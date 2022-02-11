@@ -38,7 +38,7 @@ data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Jmp Reg | Seal Reg | Call Reg | Lin Reg | Delin Reg | Drop Reg |
     Mrev Reg Reg | Tighten Reg Reg | Li Reg Int | Add Reg Reg |
     Lt Reg Reg Reg | Jnz Reg Reg | Split Reg Reg Reg | Shrink Reg Reg Reg |
-    Init Reg
+    Init Reg | Scc Reg Reg | Lcc Reg Reg
     deriving (Show)
 
 data Mem = Mem [MWord]
@@ -442,9 +442,35 @@ execInsn (State regs mem rt) (Lt rd ra rb) =
         newRegs = setReg regs rd res
     in
         if (isValue na) && (isValue nb) then
-            State newRegs mem rt
+            State (incrementPC newRegs) mem rt
         else
             Error
+
+-- lcc
+execInsn (State regs mem rt) (Lcc rd rs) =
+    let c = getReg regs rs
+        res = Value (capCursor c)
+        newRegs = setReg regs rd res
+    in
+        if validCap rt c then
+            State (incrementPC newRegs) mem rt
+        else
+            Error
+
+-- scc
+execInsn (State regs mem rt) (Scc rd rs) =
+    let c = getReg regs rd
+        n = getReg regs rs
+        cType = capType c
+        Value v = n
+        newC = c { capCursor = v }
+        newRegs = setReg regs rd newC
+    in
+        if (validCap rt c) && (isValue n) && (cType `elem` [TLin, TNon]) then
+            State (incrementPC newRegs) mem rt
+        else
+            Error
+
 
 execute :: State -> State
 execute Error = Error
@@ -532,6 +558,8 @@ loadWordAt addr nwords mem = do
                     "lt" -> Lt r1 r2 r3
                     "jnz" -> Jnz r1 r2
                     "jmp" -> Jmp r1
+                    "scc" -> Scc r1 r2
+                    "lcc" -> Lcc r1 r2
                     _ -> Mov Pc Pc
                 ))
         memLoaded <- return (setMem mem addr w) 
@@ -552,6 +580,7 @@ loadMemory nsegs mem = do
 
 loadState :: IO State
 loadState = do
+    -- ugly
     inputs <- readInts
     memSize <- return (inputs !! 0)
     gprCount <- return (inputs !! 1)
