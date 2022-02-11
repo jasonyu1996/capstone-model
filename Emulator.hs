@@ -29,7 +29,7 @@ data RegFile = RegFile {
 } deriving (Show)
 
 data RevNode = RevNode Int | RevNodeRoot | RevNodeNull
-    deriving (Show)
+    deriving (Show, Eq)
 
 data RevTree = RevTree [RevNode]
     deriving (Show)
@@ -47,7 +47,12 @@ data Mem = Mem [MWord]
 data State = State RegFile Mem RevTree | Error
     deriving (Show)
 
--- Helpe functions
+-- Helper functions
+
+isValue :: MWord -> Bool
+isValue (Value _) = True
+isValue _ = False
+
 
 -- Zero out a given word if it is a linear capability
 moved :: MWord -> MWord
@@ -110,6 +115,14 @@ getRevNode :: RevTree -> Int -> RevNode
 getRevNode (RevTree rt) n =
     rt !! n
 
+setRevNode :: RevTree -> Int -> RevNode -> RevTree
+setRevNode (RevTree rtl) n rn =
+    RevTree ((take n rtl) ++ [rn] ++ (drop (n + 1) rtl))
+
+addRevNode :: RevTree -> RevNode -> (RevTree, Int)
+addRevNode (RevTree rtl) rn =
+    (RevTree (rtl ++ [rn]), length rtl)
+
 revokedCap :: RevTree -> RevNode -> Bool
 revokedCap rt rn =
     case rn of
@@ -137,6 +150,41 @@ getMem (Mem mcontent) n =
 setMem :: Mem -> Int -> MWord -> Mem
 setMem (Mem mcontent) n w =
     Mem ((take n mcontent) ++ [w] ++ (drop (n + 1) mcontent))
+
+permBoundedBy :: Perm -> Perm -> Bool
+permBoundedBy PermNA _ = True
+permBoundedBy PermR p = elem p [PermR, PermRW, PermRX, PermRWX]
+permBoundedBy PermRW p = elem p [PermRW, PermRWX]
+permBoundedBy PermRX p = elem p [PermRX, PermRWX]
+permBoundedBy PermRWX p = elem p [PermRWX]
+
+decodePerm :: Int -> Perm
+decodePerm 0 = PermR
+decodePerm 1 = PermRW
+decodePerm 2 = PermRX
+decodePerm 3 = PermRWX
+decodePerm _ = PermNA
+
+reparent :: RevTree -> RevNode -> RevNode -> RevTree
+reparent (RevTree rtl) n newN =
+    RevTree (map (\x -> if x == n then newN else x) rtl)
+
+remove :: RevTree -> Int -> RevTree
+remove rt n = setRevNode rt n RevNodeNull
+
+updateCursor :: MWord -> MWord
+updateCursor (Cap TUninit b e a p n) = Cap TUninit b e (a + 1) p n
+updateCursor w = id w
+
+getMemRange :: Mem -> Int -> Int -> [MWord]
+getMemRange (Mem meml) b s =
+    take b (drop s meml)
+
+setMemRange :: Mem -> Int -> [MWord] -> Mem
+setMemRange (Mem meml) b s =
+    let l = take b meml
+        r = drop (b + (length s)) meml
+    in Mem (l ++ s ++ r)
 
 -- Instruction definitions
 
@@ -166,36 +214,164 @@ execInsn (State regs mem rt) (Sd rd rs) =
         w = getReg regs rs
     in
         if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (writableCap c) then
-            State (incrementPC (setReg regs rs (moved w))) (setMem mem (capCursor c) w) rt
+            let newRegs = setReg (setReg regs rs (moved w)) rd (updateCursor c)
+                newMem = setMem mem (capCursor c) w
+            in State (incrementPC newRegs) newMem rt
         else
             Error
 
 -- seal
-execInsn (State regs mem rt) (Seal r) = (State regs mem rt) -- TODO: unimplemented
+execInsn (State regs mem rt) (Seal r) =
+    let c = getReg regs r
+        newC = c { capType = TSealed }
+        newRegs = setReg regs r newC
+    in
+        if (validCap rt c) && (readableCap c) && (writableCap c) && (capType c) == TLin then
+            State (incrementPC newRegs) mem rt
+        else
+            Error
 
 -- call
-execInsn (State regs mem rt) (Call r) = (State regs mem rt) -- TODO: unimplemented
+execInsn (State regs mem rt) (Call r) =
+    let ci = getReg regs r
+        co = getReg regs Sc
+        bi = capBase ci
+        ei = capEnd ci
+        bo = capBase co
+        eo = capEnd co
+        gprSize = length (gprs regs)
+        newRegs = RegFile {
+            pc = getMem mem bi,
+            sc = ci,
+            ret = co,
+            gprs = getMemRange mem bi gprSize
+        }
+        newMem = setMemRange mem bo (gprs regs)
+    in
+        if (validCap rt ci) && (capType ci) == TSealed &&
+            (validCap rt co) && (capType co) == TSealed &&
+            bi + gprSize < ei && bo + gprSize < eo then
+            State newRegs newMem rt
+        else
+            Error
+
+
 
 -- lin
-execInsn (State regs mem rt) (Lin r) = (State regs mem rt) -- TODO: unimplemented
+execInsn (State regs mem rt) (Lin r) =
+    let c = getReg regs r
+        cNode = capNode c
+        RevTree rtl = rt
+        rtChanged = (RevNode cNode) `elem` rtl
+        newC = c { capType = if rtChanged then TUninit else TLin }
+        newRegs = setReg regs r newC
+        newRt = reparent rt (RevNode cNode) RevNodeNull
+    in
+        if (validCap rt c) && (capType c) == TRev then
+            State (incrementPC newRegs) mem newRt
+        else
+            Error
 
 -- delin
-execInsn (State regs mem rt) (Delin r) = (State regs mem rt) -- TODO: unimplemented
+execInsn (State regs mem rt) (Delin r) =
+    let c = getReg regs r
+    in
+        if (validCap rt c) && (capType c) == TLin then
+            let newC = c { capType = TNon }
+                newRegs = setReg regs r newC
+            in State (incrementPC newRegs) mem rt
+        else
+            Error
                     
 -- drop
-execInsn (State regs mem rt) (Drop r) = (State regs mem rt) -- TODO: unimplemented
+execInsn (State regs mem rt) (Drop r) =
+    let c = getReg regs r
+        cNode = capNode c
+        parentNode = getRevNode rt cNode
+    in
+        if (validCap rt c) && ((capType c) `elem` [TLin, TRev, TSealed, TUninit]) then
+            let newRt = remove (reparent rt (RevNode cNode) parentNode) cNode
+                newRegs = setReg regs r (Value 0)
+            in State (incrementPC newRegs) mem newRt
+        else
+            Error
 
 -- mrev
-execInsn (State regs mem rt) (Mrev rd rs) = (State regs mem rt) -- TODO: unimplemented
+execInsn (State regs mem rt) (Mrev rd rs) =
+    let c = getReg regs rs
+        cNode = capNode c
+        parentNode = getRevNode rt cNode
+        (irt, newNode) = addRevNode rt parentNode
+        newRt = setRevNode irt cNode (RevNode newNode)
+        newC = c { capType = TRev, capNode = newNode }
+        newRegs = setReg regs rd newC
+    in
+        if (validCap rt c) && (capType c) == TLin then
+            State (incrementPC newRegs) mem newRt
+        else
+            Error
 
 -- tighten
-execInsn (State regs mem rt) (Tighten rd rs) = (State regs mem rt) -- TODO: unimplemented
+execInsn (State regs mem rt) (Tighten rd rs) =
+    let c = getReg regs rd
+        n = getReg regs rs
+        perm = case n of
+            Value v -> decodePerm v
+            _ -> PermNA
+    in
+        if (validCap rt c) && (permBoundedBy perm (capPerm c)) then
+            let newC = c { capPerm = perm }
+                newRegs = setReg regs rd newC
+            in State (incrementPC newRegs) mem rt
+        else
+            Error
+
 
 -- split
-execInsn (State regs mem rt) (Split rd rs rp) = (State regs mem rt) -- TODO: unimplemented
+execInsn (State regs mem rt) (Split rd rs rp) =
+    let c = getReg regs rs
+        pn = getReg regs rp
+        Value p = pn
+        cNode = capNode c
+        parentNode = getRevNode rt cNode
+        (newRt, newNode) = addRevNode rt parentNode
+        b = capBase c
+        e = capEnd c
+        c1 = c {
+            capEnd = p
+        }
+        c2 = c {
+            capBase = p,
+            capNode = newNode
+        }
+        newRegs = setReg (setReg regs rd c1) rs c2
+    in
+        if (validCap rt c) && (capType c) == TLin && (isValue pn) &&
+            b < p && p < e then
+            State (incrementPC newRegs) mem newRt
+        else
+            Error
 
 -- shrink
-execInsn (State regs mem rt) (Shrink rd rs rp) = (State regs mem rt) -- TODO: unimplemented
+execInsn (State regs mem rt) (Shrink rd rb re) = 
+    let c = getReg regs rd
+        b = getReg regs rb
+        e = getReg regs re
+    in
+        if (validCap rt c) then
+            case (b, e) of
+                (Value bn, Value en) ->
+                    if bn >= (capBase c) && bn < en && en <= (capEnd c) then
+                        let newC = c { capBase = bn, capEnd = en }
+                            newRegs = setReg regs rd newC
+                        in State (incrementPC newRegs) mem rt
+                    else
+                        Error
+                _ -> Error
+        else
+            Error
+
+
 
 -- init
 execInsn (State regs mem rt) (Init r) = 
