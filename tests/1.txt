@@ -1,0 +1,23 @@
+# fibonacci 10
+# memsize, gprcnt, initpc, segcnt
+128 8 0 1
+# baseaddr, segsize
+0 18
+li r0 32
+splitl r1 pc r0
+mrev r3 r1
+lin r3
+li r1 1
+li r2 1
+li r4 0
+li r5 1
+li r7 10
+li r0 10
+out r1
+mov r3 r2
+mov r2 r1
+add r1 r3
+add r4 r5
+lt r6 r4 r7
+jnz r0 r6
+halt

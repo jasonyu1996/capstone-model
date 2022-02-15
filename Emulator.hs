@@ -37,8 +37,9 @@ data RevTree = RevTree [RevNode]
 data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Jmp Reg | Seal Reg | Call Reg | Lin Reg | Delin Reg | Drop Reg |
     Mrev Reg Reg | Tighten Reg Reg | Li Reg Int | Add Reg Reg |
-    Lt Reg Reg Reg | Jnz Reg Reg | Split Reg Reg Reg | Shrink Reg Reg Reg |
-    Init Reg | Scc Reg Reg | Lcc Reg Reg
+    Lt Reg Reg Reg | Jnz Reg Reg | Split Reg Reg Reg | Splitl Reg Reg Reg | 
+    Shrink Reg Reg Reg |
+    Init Reg | Scc Reg Reg | Lcc Reg Reg | Out Reg | Halt
     deriving (Show)
 
 data Mem = Mem [MWord]
@@ -188,12 +189,12 @@ setMemRange (Mem meml) b s =
 
 -- Instruction definitions
 
-execInsn :: State -> Instruction -> State
-execInsn Error _ = Error
+execInsn :: State -> Instruction -> (State, String)
+execInsn Error _ = (Error, "Error state\n")
 
 -- mov
 execInsn (State regs mem rt) (Mov rd rs) =
-    State (incrementPC (setReg (setReg regs rd w) rs (moved w))) mem rt
+    (State (incrementPC (setReg (setReg regs rd w) rs (moved w))) mem rt, "")
     where
         w = getReg regs rs 
 
@@ -203,9 +204,9 @@ execInsn (State regs mem rt) (Ld rd rs) =
         w = getMem mem (capCursor c)
     in
         if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (readableCap c) then
-            State (incrementPC (setReg regs rd w)) (setMem mem (capCursor c) (moved w)) rt
+            (State (incrementPC (setReg regs rd w)) (setMem mem (capCursor c) (moved w)) rt, "")
         else
-            Error
+            (Error, "Error ld\n")
 
 
 -- sd
@@ -216,9 +217,9 @@ execInsn (State regs mem rt) (Sd rd rs) =
         if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (writableCap c) then
             let newRegs = setReg (setReg regs rs (moved w)) rd (updateCursor c)
                 newMem = setMem mem (capCursor c) w
-            in State (incrementPC newRegs) newMem rt
+            in (State (incrementPC newRegs) newMem rt, "")
         else
-            Error
+            (Error, "Error sd\n")
 
 -- seal
 execInsn (State regs mem rt) (Seal r) =
@@ -227,9 +228,9 @@ execInsn (State regs mem rt) (Seal r) =
         newRegs = setReg regs r newC
     in
         if (validCap rt c) && (readableCap c) && (writableCap c) && (capType c) == TLin then
-            State (incrementPC newRegs) mem rt
+            (State (incrementPC newRegs) mem rt, "")
         else
-            Error
+            (Error, "Error seal\n")
 
 -- call
 execInsn (State regs mem rt) (Call r) =
@@ -251,9 +252,9 @@ execInsn (State regs mem rt) (Call r) =
         if (validCap rt ci) && (capType ci) == TSealed &&
             (validCap rt co) && (capType co) == TSealed &&
             bi + gprSize < ei && bo + gprSize < eo then
-            State newRegs newMem rt
+            (State newRegs newMem rt, "")
         else
-            Error
+            (Error, "Error call\n")
 
 
 
@@ -268,9 +269,9 @@ execInsn (State regs mem rt) (Lin r) =
         newRt = reparent rt (RevNode cNode) RevNodeNull
     in
         if (validCap rt c) && (capType c) == TRev then
-            State (incrementPC newRegs) mem newRt
+            (State (incrementPC newRegs) mem newRt, "")
         else
-            Error
+            (Error, "Error lin\n")
 
 -- delin
 execInsn (State regs mem rt) (Delin r) =
@@ -279,9 +280,9 @@ execInsn (State regs mem rt) (Delin r) =
         if (validCap rt c) && (capType c) == TLin then
             let newC = c { capType = TNon }
                 newRegs = setReg regs r newC
-            in State (incrementPC newRegs) mem rt
+            in (State (incrementPC newRegs) mem rt, "")
         else
-            Error
+            (Error, "Error delin\n")
                     
 -- drop
 execInsn (State regs mem rt) (Drop r) =
@@ -292,9 +293,9 @@ execInsn (State regs mem rt) (Drop r) =
         if (validCap rt c) && ((capType c) `elem` [TLin, TRev, TSealed, TUninit]) then
             let newRt = remove (reparent rt (RevNode cNode) parentNode) cNode
                 newRegs = setReg regs r (Value 0)
-            in State (incrementPC newRegs) mem newRt
+            in (State (incrementPC newRegs) mem newRt, "")
         else
-            Error
+            (Error, "Error drop\n")
 
 -- mrev
 execInsn (State regs mem rt) (Mrev rd rs) =
@@ -307,9 +308,9 @@ execInsn (State regs mem rt) (Mrev rd rs) =
         newRegs = setReg regs rd newC
     in
         if (validCap rt c) && (capType c) == TLin then
-            State (incrementPC newRegs) mem newRt
+            (State (incrementPC newRegs) mem newRt, "")
         else
-            Error
+            (Error, "Error mrev\n")
 
 -- tighten
 execInsn (State regs mem rt) (Tighten rd rs) =
@@ -322,10 +323,34 @@ execInsn (State regs mem rt) (Tighten rd rs) =
         if (validCap rt c) && (permBoundedBy perm (capPerm c)) then
             let newC = c { capPerm = perm }
                 newRegs = setReg regs rd newC
-            in State (incrementPC newRegs) mem rt
+            in (State (incrementPC newRegs) mem rt, "")
         else
-            Error
+            (Error, "Error tighten\n")
 
+-- splitl
+execInsn (State regs mem rt) (Splitl rd rs rp) =
+    let c = getReg regs rs
+        pn = getReg regs rp
+        Value p = pn
+        cNode = capNode c
+        parentNode = getRevNode rt cNode
+        (newRt, newNode) = addRevNode rt parentNode
+        b = capBase c
+        e = capEnd c
+        c2 = c {
+            capEnd = p
+        }
+        c1 = c {
+            capBase = p,
+            capNode = newNode
+        }
+        newRegs = setReg (setReg regs rd c1) rs c2
+    in
+        if (validCap rt c) && (capType c) == TLin && (isValue pn) &&
+            b < p && p < e then
+            (State (incrementPC newRegs) mem newRt, "")
+        else
+            (Error, "Error splitl\n")
 
 -- split
 execInsn (State regs mem rt) (Split rd rs rp) =
@@ -348,9 +373,9 @@ execInsn (State regs mem rt) (Split rd rs rp) =
     in
         if (validCap rt c) && (capType c) == TLin && (isValue pn) &&
             b < p && p < e then
-            State (incrementPC newRegs) mem newRt
+            (State (incrementPC newRegs) mem newRt, "")
         else
-            Error
+            (Error, "Error split\n")
 
 -- shrink
 execInsn (State regs mem rt) (Shrink rd rb re) = 
@@ -364,12 +389,12 @@ execInsn (State regs mem rt) (Shrink rd rb re) =
                     if bn >= (capBase c) && bn < en && en <= (capEnd c) then
                         let newC = c { capBase = bn, capEnd = en }
                             newRegs = setReg regs rd newC
-                        in State (incrementPC newRegs) mem rt
+                        in (State (incrementPC newRegs) mem rt, "")
                     else
-                        Error
-                _ -> Error
+                        (Error, "Error shrink\n")
+                _ -> (Error, "Error shrink\n")
         else
-            Error
+            (Error, "Error shrink\n")
 
 
 
@@ -378,13 +403,13 @@ execInsn (State regs mem rt) (Init r) =
     let c = getReg regs r
     in
         if (validCap rt c) && (capType c) == TUninit && (capBase c) == (capEnd c) then
-            State (incrementPC (setReg regs r (c { capType = TLin }))) mem rt
+            (State (incrementPC (setReg regs r (c { capType = TLin }))) mem rt, "")
         else
-            Error
+            (Error, "Error init\n")
 
 -- li
 execInsn (State regs mem rt) (Li r n) =
-    let newRegs = setReg regs r (Value n) in State (incrementPC newRegs) mem rt
+    let newRegs = setReg regs r (Value n) in (State (incrementPC newRegs) mem rt, "")
 
 
 -- add
@@ -397,9 +422,9 @@ execInsn (State regs mem rt) (Add rd rs) =
         newRegs = setReg regs rd res
     in
         if (isValue n1) && (isValue n2) then
-            State (incrementPC newRegs) mem rt
+            (State (incrementPC newRegs) mem rt, "")
         else
-            Error
+            (Error, "Error add\n")
 
 -- jmp
 execInsn (State regs mem rt) (Jmp r) =
@@ -410,9 +435,9 @@ execInsn (State regs mem rt) (Jmp r) =
         newRegs = setReg regs Pc newPc
     in
         if (isValue n) && (validCap rt curPc) then
-            State newRegs mem rt
+            (State newRegs mem rt, "")
         else
-            Error
+            (Error, "Error jmp\n")
 
 -- jnz
 execInsn (State regs mem rt) (Jnz rd rs) =
@@ -428,9 +453,9 @@ execInsn (State regs mem rt) (Jnz rd rs) =
                 setReg regs Pc newPc
     in
         if (isValue ns) && (isValue nd) && (validCap rt curPc) then
-            State newRegs mem rt
+            (State newRegs mem rt, "")
         else
-            Error
+            (Error, "Error jnz\n")
 
 -- lt
 execInsn (State regs mem rt) (Lt rd ra rb) =
@@ -442,9 +467,9 @@ execInsn (State regs mem rt) (Lt rd ra rb) =
         newRegs = setReg regs rd res
     in
         if (isValue na) && (isValue nb) then
-            State (incrementPC newRegs) mem rt
+            (State (incrementPC newRegs) mem rt, "")
         else
-            Error
+            (Error, "Error lt\n")
 
 -- lcc
 execInsn (State regs mem rt) (Lcc rd rs) =
@@ -453,9 +478,9 @@ execInsn (State regs mem rt) (Lcc rd rs) =
         newRegs = setReg regs rd res
     in
         if validCap rt c then
-            State (incrementPC newRegs) mem rt
+            (State (incrementPC newRegs) mem rt, "")
         else
-            Error
+            (Error, "Error lcc\n")
 
 -- scc
 execInsn (State regs mem rt) (Scc rd rs) =
@@ -467,13 +492,20 @@ execInsn (State regs mem rt) (Scc rd rs) =
         newRegs = setReg regs rd newC
     in
         if (validCap rt c) && (isValue n) && (cType `elem` [TLin, TNon]) then
-            State (incrementPC newRegs) mem rt
+            (State (incrementPC newRegs) mem rt, "")
         else
-            Error
+            (Error, "Error scc\n")
 
+-- out
+execInsn (State regs mem rt) (Out r) =
+    let d = getReg regs r
+    in (State (incrementPC regs) mem rt, (show r) ++ " = " ++ (show d) ++ "\n")
 
-execute :: State -> State
-execute Error = Error
+-- halt
+execInsn (State regs mem rt) Halt = (Error, "halted\n")
+
+execute :: State -> (State, String)
+execute Error = (Error, "Error state\n")
 execute (State regs mem rt) =
     let pcCap = getReg regs Pc
     in
@@ -482,9 +514,9 @@ execute (State regs mem rt) =
             in
                 case w of
                     Inst insn -> execInsn (State regs mem rt) insn
-                    _ -> Error
+                    _ -> (Error, "Invalid instruction @ " ++ (show pcCap) ++ ": " ++ (show w) ++ "\n")
         else
-            Error
+            (Error, "Invalid PC capability: " ++ (show pcCap) ++ "\n")
 
 
 -- IO
@@ -551,6 +583,7 @@ loadWordAt addr nwords mem = do
                     "mrev" -> Mrev r1 r2
                     "tighten" -> Tighten r1 r2
                     "split" -> Split r1 r2 r3
+                    "splitl" -> Splitl r1 r2 r3
                     "shrink" -> Shrink r1 r2 r3
                     "init" -> Init r1
                     "li" -> Li r1 v
@@ -560,6 +593,8 @@ loadWordAt addr nwords mem = do
                     "jmp" -> Jmp r1
                     "scc" -> Scc r1 r2
                     "lcc" -> Lcc r1 r2
+                    "out" -> Out r1
+                    "halt" -> Halt
                     _ -> Mov Pc Pc
                 ))
         memLoaded <- return (setMem mem addr w) 
@@ -589,7 +624,7 @@ loadState = do
     capPC <- return (Cap {
             capType = TLin,
             capBase = 0,
-            capEnd = memSize - 1,
+            capEnd = memSize,
             capCursor = initPC,
             capPerm = PermRWX,
             capNode = 0
@@ -607,14 +642,15 @@ loadState = do
 execLoop :: Int -> State -> IO ()
 execLoop _ Error = return ()
 execLoop timestamp st = do
-    let newState = execute st
-    putStrLn ((show timestamp) ++ ": " ++ (show newState))
+    let (newState, msg) = execute st
+    putStr (if msg == "" then "" else (show timestamp) ++ ": " ++ msg)
+    --putStrLn ((show timestamp) ++ ": " ++ (show newState))
     execLoop (timestamp + 1) newState
 
 main :: IO ()
 
 main = do
     state <- loadState
-    putStrLn ("Initial state: " ++ (show state))
+    --putStrLn ("Initial state: " ++ (show state))
     execLoop 1 state
 
