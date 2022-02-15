@@ -12,12 +12,13 @@ li r2 1
 li r4 0
 li r5 1
 li r7 10
-li r0 10
+:loop
 out r1
 mov r3 r2
 mov r2 r1
 add r1 r3
 add r4 r5
 lt r6 r4 r7
+li r0 :loop
 jnz r0 r6
 halt

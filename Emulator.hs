@@ -1,4 +1,6 @@
 import Data.Char
+import Data.Map (Map)
+import qualified Data.Map as Map
 
 data CapType = TLin | TNon | TRev | TSealed | TUninit 
     deriving (Eq, Show)
@@ -554,63 +556,70 @@ stringToReg s =
         _ -> GPR (read (tail s) :: Int)
 
 
-loadWordAt :: Int -> Int -> Mem -> IO Mem
-loadWordAt addr nwords mem = do
-    if nwords <= 0 then do
+loadWordAt :: Int -> Int -> Mem -> (Map String Int) -> IO Mem
+loadWordAt addr nwords mem tagMap = do
+    if nwords <= 0 then
         return mem
     else do
         line <- getSignificantLine
-        w <- if isDigit (head line) then do
-            -- data
-            return (Value (read line :: Int))
-        else do
-            -- instruction
+        if (head line) == ':' then do
             tokens <- return (words line)
-            r1 <- return (stringToReg (tokens !! 1))
-            r2 <- return (stringToReg (tokens !! 2))
-            r3 <- return (stringToReg (tokens !! 3))
-            v <- return (read (tokens !! 2) :: Int)
-            return (Inst (
-                case (head tokens) of
-                    "mov" -> Mov r1 r2
-                    "ld" -> Ld r1 r2
-                    "sd" -> Sd r1 r2
-                    "seal" -> Seal r1
-                    "call" -> Call r1
-                    "lin" -> Lin r1
-                    "delin" -> Delin r1
-                    "drop" -> Drop r1
-                    "mrev" -> Mrev r1 r2
-                    "tighten" -> Tighten r1 r2
-                    "split" -> Split r1 r2 r3
-                    "splitl" -> Splitl r1 r2 r3
-                    "shrink" -> Shrink r1 r2 r3
-                    "init" -> Init r1
-                    "li" -> Li r1 v
-                    "add" -> Add r1 r2
-                    "lt" -> Lt r1 r2 r3
-                    "jnz" -> Jnz r1 r2
-                    "jmp" -> Jmp r1
-                    "scc" -> Scc r1 r2
-                    "lcc" -> Lcc r1 r2
-                    "out" -> Out r1
-                    "halt" -> Halt
-                    _ -> Mov Pc Pc
-                ))
-        memLoaded <- return (setMem mem addr w) 
-        loadWordAt (addr + 1) (nwords - 1) memLoaded
+            loadWordAt addr nwords mem (Map.insert (tokens !! 0) addr tagMap)
+        else if (head line) == '$' then
+            return mem
+        else do
+            w <- if isDigit (head line) then do
+                -- data
+                return (Value (read line :: Int))
+            else do
+                -- instruction
+                tokens <- return (words line)
+                r1 <- return (stringToReg (tokens !! 1))
+                r2 <- return (stringToReg (tokens !! 2))
+                r3 <- return (stringToReg (tokens !! 3))
+                v <- return (case (tokens !! 2) of
+                    ':':_ -> let Just n = Map.lookup (tokens !! 2) tagMap in n
+                    _ -> read (tokens !! 2) :: Int)
+                return (Inst (
+                    case (head tokens) of
+                        "mov" -> Mov r1 r2
+                        "ld" -> Ld r1 r2
+                        "sd" -> Sd r1 r2
+                        "seal" -> Seal r1
+                        "call" -> Call r1
+                        "lin" -> Lin r1
+                        "delin" -> Delin r1
+                        "drop" -> Drop r1
+                        "mrev" -> Mrev r1 r2
+                        "tighten" -> Tighten r1 r2
+                        "split" -> Split r1 r2 r3
+                        "splitl" -> Splitl r1 r2 r3
+                        "shrink" -> Shrink r1 r2 r3
+                        "init" -> Init r1
+                        "li" -> Li r1 v
+                        "add" -> Add r1 r2
+                        "lt" -> Lt r1 r2 r3
+                        "jnz" -> Jnz r1 r2
+                        "jmp" -> Jmp r1
+                        "scc" -> Scc r1 r2
+                        "lcc" -> Lcc r1 r2
+                        "out" -> Out r1
+                        "halt" -> Halt
+                        _ -> Mov Pc Pc
+                    ))
+            memLoaded <- return (setMem mem addr w) 
+            loadWordAt (addr + 1) (nwords - 1) memLoaded tagMap
 
-loadMemory :: Int -> Mem -> IO Mem
-loadMemory nsegs mem = do
+loadMemory :: Int -> Mem -> Map String Int -> IO Mem
+loadMemory nsegs mem tagMap = do
     if nsegs <= 0 then do
         return mem
     else do
         inputs <- readInts
         startAddr <- return (inputs !! 0)
         segSize <- return (inputs !! 1)
-        memLoaded <- loadWordAt startAddr segSize mem
-        loadMemory (nsegs - 1) memLoaded
-    
+        memLoaded <- loadWordAt startAddr segSize mem tagMap
+        loadMemory (nsegs - 1) memLoaded tagMap
     
 
 loadState :: IO State
@@ -635,7 +644,7 @@ loadState = do
         ret = Value 0,
         gprs = replicate gprCount (Value 0)
     })
-    mem <- loadMemory numSegs (Mem (replicate memSize (Value 0)))
+    mem <- loadMemory numSegs (Mem (replicate memSize (Value 0))) Map.empty
     let rt = RevTree [RevNodeRoot]
     return (State regs mem rt)
 
