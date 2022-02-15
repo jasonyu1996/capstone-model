@@ -47,7 +47,11 @@ data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
 data Mem = Mem [MWord]
     deriving (Show)
 
-data State = State RegFile Mem RevTree | Error
+data State = State {
+    regs :: RegFile,
+    mem :: Mem,
+    rt :: RevTree
+} | Error
     deriving (Show)
 
 -- Helper functions
@@ -181,7 +185,7 @@ updateCursor w = id w
 
 getMemRange :: Mem -> Int -> Int -> [MWord]
 getMemRange (Mem meml) b s =
-    take b (drop s meml)
+    take s (drop b meml)
 
 setMemRange :: Mem -> Int -> [MWord] -> Mem
 setMemRange (Mem meml) b s =
@@ -249,14 +253,14 @@ execInsn (State regs mem rt) (Call r) =
             ret = co,
             gprs = getMemRange mem (bi + 1) gprSize
         }
-        newMem = setMemRange (setMem mem bo (pc regs)) (bo + 1) (gprs regs)
+        newMem = setMemRange (setMem mem bo (pc (incrementPC regs))) (bo + 1) (gprs regs)
     in
         if (validCap rt ci) && (capType ci) == TSealed &&
             (validCap rt co) && (capType co) == TSealed &&
             bi + gprSize < ei && bo + gprSize < eo then
             (State newRegs newMem rt, "")
         else
-            (Error, "Error call\n")
+            (Error, "Error call: " ++ (show ci) ++ "\n")
 
 
 
@@ -556,17 +560,17 @@ stringToReg s =
         _ -> GPR (read (tail s) :: Int)
 
 
-loadWordAt :: Int -> Int -> Mem -> (Map String Int) -> IO Mem
+loadWordAt :: Int -> Int -> Mem -> (Map String Int) -> IO (Mem, (Map String Int))
 loadWordAt addr nwords mem tagMap = do
-    if nwords <= 0 then
-        return mem
+    if nwords == 0 then
+        return (mem, tagMap)
     else do
         line <- getSignificantLine
         if (head line) == ':' then do
             tokens <- return (words line)
             loadWordAt addr nwords mem (Map.insert (tokens !! 0) addr tagMap)
         else if (head line) == '$' then
-            return mem
+            return (mem, tagMap)
         else do
             w <- if isDigit (head line) then do
                 -- data
@@ -618,8 +622,8 @@ loadMemory nsegs mem tagMap = do
         inputs <- readInts
         startAddr <- return (inputs !! 0)
         segSize <- return (inputs !! 1)
-        memLoaded <- loadWordAt startAddr segSize mem tagMap
-        loadMemory (nsegs - 1) memLoaded tagMap
+        (memLoaded, newTagMap) <- loadWordAt startAddr segSize mem tagMap
+        loadMemory (nsegs - 1) memLoaded newTagMap
     
 
 loadState :: IO State
@@ -653,6 +657,7 @@ execLoop _ Error = return ()
 execLoop timestamp st = do
     let (newState, msg) = execute st
     putStr (if msg == "" then "" else (show timestamp) ++ ": " ++ msg)
+    --putStrLn (show (length (gprs (regs newState))))
     --putStrLn ((show timestamp) ++ ": " ++ (show newState))
     execLoop (timestamp + 1) newState
 

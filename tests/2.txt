@@ -1,0 +1,64 @@
+# function call
+# memsize, gprcnt, initpc, segcnt
+512 8 0 4
+# baseaddr, segsize
+
+200 -1
+:fib
+li r1 1
+li r2 1
+li r4 0
+li r5 1
+li r7 10
+:loop
+out r1
+mov r3 r2
+mov r2 r1
+add r1 r3
+add r4 r5
+lt r6 r4 r7
+li r0 :loop
+jnz r0 r6
+out ret
+call ret
+halt
+$
+
+# sealed region of main
+400 -1
+:scmain
+$
+
+# sealed region of fib
+450 -1
+:scfib
+$
+
+0 -1
+:main
+li r0 :fib
+splitl r1 pc r0
+li r0 :scmain
+splitl r2 r1 r0
+li r0 :scfib
+splitl r3 r2 r0
+out r1
+out r2
+out r3
+# r1 = fib
+# r2 = scmain
+# r3 = scfib
+# set up scmain
+seal r2
+mov sc r2
+# set up scfib
+li r0 :scfib
+scc r3 r0
+li r0 :fib
+scc r1 r0
+sd r3 r1
+seal r3
+call r3
+halt
+$
+

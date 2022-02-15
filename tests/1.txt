@@ -2,7 +2,7 @@
 # memsize, gprcnt, initpc, segcnt
 128 8 0 1
 # baseaddr, segsize
-0 18
+0 -1
 li r0 32
 splitl r1 pc r0
 mrev r3 r1
@@ -22,3 +22,5 @@ lt r6 r4 r7
 li r0 :loop
 jnz r0 r6
 halt
+$
+
