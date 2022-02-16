@@ -228,14 +228,18 @@ callHelper regs mem rt r =
             bi + gprSize < ei && bo + gprSize < eo then
             (State newRegs newMem rt, "")
         else
-            (Error, "Error call: " ++ (show ci) ++ "\n")
+            (Error, "Error call: " ++ (show (ci, getMem mem bi)) ++ "\n")
 
 
 -- all traps can go here
 trap :: RegFile -> Mem -> RevTree -> (State, String)
 trap regs mem rt =
-    callHelper regs mem rt Epc
-
+    let c = epc regs
+    in 
+        if validCap rt c then
+            callHelper regs mem rt Epc
+        else
+            (State regs mem rt, "")
 
 -- Instruction definitions
 
@@ -403,7 +407,7 @@ execInsn (State regs mem rt) (Splitl rd rs rp) =
             b < p && p < e then
             (State (incrementPC newRegs) mem newRt, "")
         else
-            (Error, "Error splitl\n")
+            (Error, "Error splitl: " ++ (show (rd, rs, rp)) ++ "\n")
 
 -- split
 execInsn (State regs mem rt) (Split rd rs rp) =
@@ -665,24 +669,28 @@ loadWordAt addr nwords mem tagMap = do
 
 loadMemory :: Int -> Mem -> Map String Int -> IO Mem
 loadMemory nsegs mem tagMap = do
-    if nsegs <= 0 then do
+    if nsegs == 0 then do
         return mem
     else do
         inputs <- readInts
         startAddr <- return (inputs !! 0)
         segSize <- return (inputs !! 1)
-        (memLoaded, newTagMap) <- loadWordAt startAddr segSize mem tagMap
-        loadMemory (nsegs - 1) memLoaded newTagMap
+        if startAddr < 0 then
+            return mem
+        else do
+            (memLoaded, newTagMap) <- loadWordAt startAddr segSize mem tagMap
+            loadMemory (nsegs - 1) memLoaded newTagMap
     
 
-loadState :: IO State
+loadState :: IO (State, Int)
 loadState = do
     -- ugly
     inputs <- readInts
     memSize <- return (inputs !! 0)
     gprCount <- return (inputs !! 1)
     initPC <- return (inputs !! 2)
-    numSegs <- return (inputs !! 3)
+    clockInterval <- return (inputs !! 3)
+    numSegs <- return (inputs !! 4)
     capPC <- return (Cap {
             capType = TLin,
             capBase = 0,
@@ -700,21 +708,24 @@ loadState = do
     })
     mem <- loadMemory numSegs (Mem (replicate memSize (Value 0))) Map.empty
     let rt = RevTree [RevNodeRoot]
-    return (State regs mem rt)
+    return (State regs mem rt, clockInterval)
 
-execLoop :: Int -> State -> IO ()
-execLoop _ Error = return ()
-execLoop timestamp st = do
-    let (newState, msg) = execute st
+execLoop :: Int -> Int -> State -> IO ()
+execLoop _ _ Error = return ()
+execLoop timestamp clockInterval st = do
+    let (newState, msg) = if (clockInterval > 0) && (mod timestamp clockInterval == 0) then
+            let State regs mem rt = st in trap regs mem rt
+        else  
+            execute st
     putStr (if msg == "" then "" else (show timestamp) ++ ": " ++ msg)
     --putStrLn (show (length (gprs (regs newState))))
     --putStrLn ((show timestamp) ++ ": " ++ (show newState))
-    execLoop (timestamp + 1) newState
+    execLoop (timestamp + 1) clockInterval newState
 
 main :: IO ()
 
 main = do
-    state <- loadState
+    (state, clockInterval) <- loadState
     --putStrLn ("Initial state: " ++ (show state))
-    execLoop 1 state
+    execLoop 1 clockInterval state 
 

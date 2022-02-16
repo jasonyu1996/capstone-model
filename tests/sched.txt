@@ -1,0 +1,296 @@
+# preemptive thread scheduler
+# memsize, gprcnt, initpc, clock, segcnt
+1024 14 0 25 -1
+# baseaddr, segsize
+
+200 -1
+:fib
+# thread id in r0
+li r1 1
+li r2 1
+li r4 0
+li r5 1
+li r7 10
+:loop
+out r0
+out r1
+mov r3 r2
+mov r2 r1
+add r1 r3
+add r4 r5
+lt r6 r4 r7
+li r3 :loop
+jnz r3 r6
+return ret
+halt
+$
+
+
+# thread 1 sealed region
+450 -1
+:sealed1
+0
+:sealed1.sc
+0
+:sealed1.epc
+0
+0
+:sealed1.gprs
+1
+$
+
+# thread 2 sealed region
+470 -1
+:sealed2
+0
+:sealed2.sc
+0
+:sealed2.epc
+0
+0
+:sealed2.gprs
+2
+$
+
+# thread 3 sealed region
+490 -1
+:sealed3
+0
+:sealed3.sc
+0
+:sealed3.epc
+0
+0
+:sealed3.gprs
+3
+$
+
+# thread 4 sealed region
+510 -1
+:sealed4
+0
+:sealed4.sc
+0
+:sealed4.epc
+0
+0
+:sealed4.gprs
+4
+$
+
+# ------- save region --------
+# main save region
+530 -1
+:scmain
+$
+
+# thread 1 save region
+550 -1
+:sc1
+$
+
+# thread 2 save region
+570 -1
+:sc2
+$
+
+# thread 3 save region
+590 -1
+:sc3
+$
+
+# thread 4 save region
+610 -1
+:sc4
+$
+
+# --------- exception handler ---------
+700 -1
+:handler
+:handler.1
+# data here
+0
+:handler.2
+0
+:handler.3
+$
+
+750 -1
+:handler.code
+# print out the thread id
+# round-robin sched
+
+return ret
+$
+
+# --------- handler sc -----------
+800 -1
+:handlersc1
+0
+0
+0
+0
+:handlersc1.gprs
+1
+$
+
+
+820 -1
+:handlersc2
+0
+0
+0
+0
+:handlersc2.gprs
+2
+$
+
+840 -1
+:handlersc3
+0
+0
+0
+0
+:handlersc3.gprs
+3
+$
+
+860 -1
+:handlersc4
+0
+0
+0
+0
+:handlersc4.gprs
+4
+$
+
+# ------------ main ------------
+0 -1
+:main
+li r0 :fib
+splitl r1 pc r0
+scc r1 r0
+# r1: capability to fib
+li r0 :sealed1
+splitl r2 r1 r0
+# r2: thread 1 sealed region
+scc r2 r0
+li r0 :sealed2
+splitl r3 r2 r0
+scc r3 r0
+li r0 :sealed3
+splitl r4 r3 r0
+scc r4 r0
+li r0 :sealed4
+splitl r5 r4 r0
+scc r5 r0
+li r0 :scmain
+splitl r6 r5 r0
+scc r6 r0
+li r0 :sc1
+splitl r7 r6 r0
+scc r7 r0
+li r0 :sc2
+splitl r8 r7 r0
+scc r8 r0
+li r0 :sc3
+splitl r9 r8 r0
+scc r9 r0
+li r0 :sc4
+splitl r10 r9 r0
+scc r10 r0
+li r0 :handler
+splitl r11 r10 r0
+li r0 :handler.code
+scc r11 r0
+li r0 :handlersc1
+splitl r12 r11 r0
+
+delin r1
+delin r11
+
+li r0 :handlersc1
+scc r12 r0
+sd r12 r11
+
+# set up sc of main
+mov sc r6
+
+out r2
+out r1
+sd r2 r1
+li r0 :sealed1.sc
+scc r2 r0
+sd r2 r7
+li r0 :handlersc2
+splitl r13 r12 r0
+scc r13 r0
+sd r13 r11
+li r0 :sealed1.epc
+scc r2 r0
+seal r12
+sd r2 r12
+mov r12 r13
+
+sd r3 r1
+li r0 :sealed2.sc
+scc r3 r0
+sd r3 r8
+li r0 :handlersc3
+splitl r13 r12 r0
+scc r13 r0
+sd r13 r11
+li r0 :sealed2.epc
+scc r3 r0
+seal r12
+sd r3 r12
+mov r12 r13
+
+
+sd r4 r1
+li r0 :sealed3.sc
+scc r4 r0
+sd r4 r9
+li r0 :handlersc4
+splitl r13 r12 r0
+scc r13 r0
+sd r13 r11
+li r0 :sealed3.epc
+scc r4 r0
+seal r12
+sd r4 r12
+mov r12 r13
+
+sd r5 r1
+li r0 :sealed4.sc
+scc r5 r0
+sd r5 r10
+li r0 :sealed4.epc
+scc r5 r0
+seal r12
+sd r5 r12
+
+seal r2
+seal r3
+seal r4
+seal r5
+
+# store the fib cap inside the handler region
+li r0 :handler.1
+scc r11 r0
+sd r11 r3
+
+li r0 :handler.2
+scc r11 r0
+sd r11 r4
+
+li r0 :handler.3
+scc r11 r0
+sd r11 r5
+
+call r2
+halt
+$
+
+-1 -1

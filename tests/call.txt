@@ -1,6 +1,6 @@
 # function call (main calling fib three times)
-# memsize, gprcnt, initpc, segcnt
-512 8 0 4
+# memsize, gprcnt, initpc, clock, segcnt
+512 8 0 0 4
 # baseaddr, segsize
 
 200 -1

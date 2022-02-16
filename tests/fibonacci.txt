@@ -1,6 +1,6 @@
 # fibonacci 10
-# memsize, gprcnt, initpc, segcnt
-128 8 0 1
+# memsize, gprcnt, initpc, clock, segcnt
+128 8 0 0 1
 # baseaddr, segsize
 0 -1
 li r0 32
