@@ -2,7 +2,7 @@ import Data.Char
 import Data.Map (Map)
 import qualified Data.Map as Map
 
-data CapType = TLin | TNon | TRev | TSealed | TSealedRet | TUninit 
+data CapType = TLin | TNon | TRev | TSealed | TSealedRet Reg | TUninit 
     deriving (Eq, Show)
 
 type Addr = Int
@@ -11,7 +11,7 @@ data Perm = PermNA | PermR | PermRW | PermRX | PermRWX
     deriving (Eq, Show)
 
 data Reg = Pc | Sc | Epc | Ret | GPR Int
-    deriving (Show)
+    deriving (Eq, Show)
 
 data MWord = Cap {
     capType :: CapType,
@@ -38,12 +38,13 @@ data RevTree = RevTree [RevNode]
     deriving (Show)
 
 data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
-    Jmp Reg | Seal Reg | Call Reg | Return Reg |
+    Jmp Reg | Seal Reg | SealRet Reg Reg | Call Reg | Return Reg Reg | ReturnSealed Reg Reg |
     Lin Reg | Delin Reg | Drop Reg |
     Mrev Reg Reg | Tighten Reg Reg | Li Reg Int | Add Reg Reg |
-    Lt Reg Reg Reg | Jnz Reg Reg | Split Reg Reg Reg | Splitl Reg Reg Reg | 
+    Lt Reg Reg Reg | Jnz Reg Reg | Jz Reg Reg | Split Reg Reg Reg | Splitl Reg Reg Reg | 
     Shrink Reg Reg Reg |
-    Init Reg | Scc Reg Reg | Lcc Reg Reg | Out Reg | Halt | Except
+    Init Reg | Scc Reg Reg | Lcc Reg Reg | Out Reg | Halt | Except |
+    IsCap Reg Reg
     deriving (Show)
 
 data Mem = Mem [MWord]
@@ -68,10 +69,13 @@ moved :: MWord -> MWord
 moved w =
     case w of
         Cap t b e a p n -> 
-            if t `elem` [TLin, TRev, TSealed, TUninit] then
-                Value 0
-            else
-                w
+            case t of
+                TSealedRet _ -> Value 0
+                _ -> 
+                    if (t `elem` [TLin, TRev, TSealed, TUninit]) then
+                        Value 0
+                    else
+                        w
         _ -> w
 
 getReg :: RegFile -> Reg -> MWord
@@ -198,7 +202,7 @@ setMemRange (Mem meml) b s =
     in Mem (l ++ s ++ r)
 
 -- call helper (shared between call and except)
--- layout of sc region: bo = pc, bo + 1 = sc, bo + 2 = epc, bo + 3 = ret, bo + 4 = gprs
+-- layout of sc region: bo = pc, bo + 1 = epc, bo + 2 = ret, bo + 3 = gprs
 -- upon call: load sc from mem, store ret to sc
 callHelper :: RegFile -> Mem -> RevTree -> Reg -> (State, String)
 callHelper regs mem rt r =
@@ -211,17 +215,16 @@ callHelper regs mem rt r =
         gprSize = length (gprs regs)
         newRegs = RegFile {
             pc = getMem mem bi,
-            sc = getMem mem $ bi + 1,
-            epc = getMem mem $ bi + 2,
-            ret = co { capType = TSealedRet } ,  -- we do not load the ret from the sc region upon call
+            sc = ci { capType = TLin },
+            epc = getMem mem $ bi + 1,
+            ret = co { capType = TSealedRet r } ,  -- we do not load the ret from the sc region upon call
             -- we need to give a sealedret cap for the callee to return
-            gprs = getMemRange mem (bi + 4) gprSize
+            gprs = getMemRange mem (bi + 3) gprSize
         }
         mem1 = setMem mem bo (pc regs)
-        mem2 = setMem mem1 (bo + 1) (sc regs)
-        mem3 = setMem mem2 (bo + 2) (epc regs)
-        mem4 = setMem mem3 (bo + 3) (ret regs)
-        newMem = setMemRange mem4 (bo + 4) (gprs regs)
+        mem2 = setMem mem1 (bo + 1) (epc regs)
+        mem3 = setMem mem2 (bo + 2) (ret regs)
+        newMem = setMemRange mem3 (bo + 3) (gprs regs)
     in
         if (validCap rt ci) && (capType ci) == TSealed &&
             (validCap rt co) && (writableCap co) &&
@@ -230,6 +233,28 @@ callHelper regs mem rt r =
         else
             (Error, "Error call: " ++ (show (ci, getMem mem bi)) ++ "\n")
 
+returnHelper :: RegFile -> Mem -> RevTree -> Reg -> MWord -> (State, String)
+returnHelper regs mem rt r retval =
+    let ci = getReg regs r
+        bi = capBase ci
+        ei = capEnd ci
+        TSealedRet rret = capType ci
+        gprSize = length (gprs regs)
+        newRegs = setReg (RegFile {
+            pc = getMem mem bi,
+            sc = ci { capType = TLin },
+            epc = getMem mem $ bi + 1,
+            ret = getMem mem $ bi + 2,
+            gprs = getMemRange mem (bi + 3) gprSize
+        }) rret retval
+        newMem = setMemRange mem bi (replicate (3 + gprSize) (Value 0)) -- clear sc to maintain linearity
+    in
+        if (validCap rt ci) && bi + gprSize < ei then
+            case capType ci of
+                TSealedRet _ -> (State newRegs mem rt, "")
+                _ -> (Error, "Error return: " ++ (show ci) ++ "\n")
+        else
+            (Error, "Error return: " ++ (show ci) ++ "\n")
 
 -- all traps can go here
 trap :: RegFile -> Mem -> RevTree -> (State, String)
@@ -260,7 +285,7 @@ execInsn (State regs mem rt) (Ld rd rs) =
         if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (readableCap c) then
             (State (incrementPC (setReg regs rd w)) (setMem mem (capCursor c) (moved w)) rt, "")
         else
-            (Error, "Error ld\n")
+            (Error, "Error ld " ++ (show $ Ld rd rs) ++ "\n")
 
 
 -- sd
@@ -286,6 +311,18 @@ execInsn (State regs mem rt) (Seal r) =
         else
             (Error, "Error seal\n")
 
+-- sealret
+execInsn (State regs mem rt) (SealRet rd rs) =
+    let c = getReg regs rd
+        newC = c { capType = TSealedRet rs }
+        newRegs = setReg regs rd newC
+    in
+        if (validCap rt c) && (readableCap c) && (writableCap c) && (capType c) == TLin then
+            (State (incrementPC newRegs) mem rt, "")
+        else
+            (Error, "Error seal\n")
+    
+
 -- call
 execInsn (State regs mem rt) (Call r) =
     callHelper (incrementPC regs) mem rt r
@@ -295,25 +332,34 @@ execInsn (State regs mem rt) Except =
     trap regs mem rt
 
 -- return
-execInsn (State regs mem rt) (Return r) =
-    let ci = getReg regs r
-        bi = capBase ci
-        ei = capEnd ci
-        gprSize = length (gprs regs)
-        newRegs = RegFile {
-            pc = getMem mem bi,
-            sc = getMem mem $ bi + 1,
-            epc = getMem mem $ bi + 2,
-            ret = getMem mem $ bi + 3,
-            gprs = getMemRange mem (bi + 4) gprSize
-        }
-        newMem = setMemRange mem bi (replicate (4 + gprSize) (Value 0)) -- clear sc to maintain linearity
-    in
-        if (validCap rt ci) && (capType ci) == TSealedRet &&
-            bi + gprSize < ei then
-            (State newRegs mem rt, "")
+execInsn (State regs mem rt) (Return rd rs) =
+    let retval = getReg regs rs
+    in 
+        if rd == rs then
+            (Error, "Error return: the two operands cannot be the same\n")
         else
-            (Error, "Error return: " ++ (show ci) ++ "\n")
+            returnHelper regs mem rt rd retval
+
+-- returnsealed
+execInsn (State regs mem rt) (ReturnSealed rd rs) =
+    let Value cursor = getReg regs rs
+        newPC = (pc regs) { capCursor = cursor }
+        scCap = sc regs
+        scBase = capBase scCap
+        scEnd = capEnd scCap
+        gprSize = length $ gprs regs
+
+        mem1 = setMem mem scBase newPC
+        mem2 = setMem mem1 (scBase + 1) (epc regs)
+        newMem = setMemRange mem2 (scBase + 3) (gprs regs)
+
+        retval = scCap { capType = TSealed }
+    in 
+        if (isValue $ getReg regs rs) && (validCap rt scCap) &&
+            (scBase + gprSize + 3 < scEnd) then
+            returnHelper regs newMem rt rd retval
+        else
+            (Error, "Error returnsealed\n")
 
 -- lin
 execInsn (State regs mem rt) (Lin r) =
@@ -496,6 +542,26 @@ execInsn (State regs mem rt) (Jmp r) =
         else
             (Error, "Error jmp\n")
 
+
+-- jz
+execInsn (State regs mem rt) (Jz rd rs) =
+    let ns = getReg regs rs
+        nd = getReg regs rd
+        Value vs = ns
+        Value vd = nd
+        curPc = getReg regs Pc
+        newPc = curPc { capCursor = vd }
+        newRegs = if vs /= 0 then
+                incrementPC regs
+            else
+                setReg regs Pc newPc
+    in
+        if (isValue ns) && (isValue nd) && (validCap rt curPc) then
+            (State newRegs mem rt, "")
+        else
+            (Error, "Error jnz\n")
+
+
 -- jnz
 execInsn (State regs mem rt) (Jnz rd rs) =
     let ns = getReg regs rs
@@ -557,6 +623,14 @@ execInsn (State regs mem rt) (Scc rd rs) =
 execInsn (State regs mem rt) (Out r) =
     let d = getReg regs r
     in (State (incrementPC regs) mem rt, (show r) ++ " = " ++ (show d) ++ "\n")
+
+-- iscap
+execInsn (State regs mem rt) (IsCap rd rs) =
+    let c = getReg regs rs
+        res = if validCap rt c then 1 else 0
+        newRegs = setReg regs rd $ Value res
+    in
+        (State (incrementPC newRegs) mem rt, "")
 
 -- halt
 execInsn (State regs mem rt) Halt = (Error, "halted\n")
@@ -642,8 +716,10 @@ loadWordAt addr nwords mem tagMap = do
                         "ld" -> Ld r1 r2
                         "sd" -> Sd r1 r2
                         "seal" -> Seal r1
+                        "sealret" -> SealRet r1 r2
                         "call" -> Call r1
-                        "return" -> Return r1
+                        "ret" -> Return r1 r2
+                        "retsl" -> ReturnSealed r1 r2
                         "lin" -> Lin r1
                         "delin" -> Delin r1
                         "drop" -> Drop r1
@@ -657,10 +733,12 @@ loadWordAt addr nwords mem tagMap = do
                         "add" -> Add r1 r2
                         "lt" -> Lt r1 r2 r3
                         "jnz" -> Jnz r1 r2
+                        "jz" -> Jz r1 r2
                         "jmp" -> Jmp r1
                         "scc" -> Scc r1 r2
                         "lcc" -> Lcc r1 r2
                         "out" -> Out r1
+                        "iscap" -> IsCap r1 r2
                         "halt" -> Halt
                         _ -> Mov Pc Pc
                     ))

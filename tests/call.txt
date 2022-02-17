@@ -20,7 +20,8 @@ lt r6 r4 r7
 li r0 :loop
 jnz r0 r6
 out ret
-return ret
+li r1 :fib
+retsl ret r1
 halt
 $
 

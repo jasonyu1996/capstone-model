@@ -1,6 +1,6 @@
 # preemptive thread scheduler
 # memsize, gprcnt, initpc, clock, segcnt
-1024 14 0 25 -1
+1024 16 0 25 -1
 # baseaddr, segsize
 
 200 -1
@@ -21,8 +21,8 @@ add r4 r5
 lt r6 r4 r7
 li r3 :loop
 jnz r3 r6
-return ret
-halt
+li r1 1
+retsl ret r1
 $
 
 
@@ -30,10 +30,9 @@ $
 450 -1
 :sealed1
 0
-:sealed1.sc
-0
 :sealed1.epc
 0
+:sealed1.ret
 0
 :sealed1.gprs
 1
@@ -43,10 +42,9 @@ $
 470 -1
 :sealed2
 0
-:sealed2.sc
-0
 :sealed2.epc
 0
+:sealed2.ret
 0
 :sealed2.gprs
 2
@@ -56,10 +54,9 @@ $
 490 -1
 :sealed3
 0
-:sealed3.sc
-0
 :sealed3.epc
 0
+:sealed3.ret
 0
 :sealed3.gprs
 3
@@ -69,10 +66,9 @@ $
 510 -1
 :sealed4
 0
-:sealed4.sc
-0
 :sealed4.epc
 0
+:sealed4.ret
 0
 :sealed4.gprs
 4
@@ -104,66 +100,310 @@ $
 :sc4
 $
 
-# --------- exception handler ---------
-700 -1
-:handler
-:handler.1
+920 -1
+:schedulersave1
+0
+0
+0
+:schedulersave1.gprs
+$
+
+940 -1
+:schedulersave2
+0
+0
+:schedulersave2.gprs
+$
+
+960 -1
+:schedulersave3
+0
+0
+:schedulersave3.gprs
+$
+
+980 -1
+:schedulersave4
+0
+0
+:schedulersave4.gprs
+$
+
+
+# --------- exception scheduler ---------
+650 -1
+:scheduler
+:scheduler.1
 # data here
 0
-:handler.2
+:scheduler.2
 0
-:handler.3
-$
+:scheduler.3
+0
+:scheduler.4
+0
+:scheduler.1.sc
+0
+:scheduler.2.sc
+0
+:scheduler.3.sc
+0
+:scheduler.4.sc
+0
+:scheduler.prelude.sc
+0
+:scheduler.prelude.se
+0
+:scheduler.prelude.ret
+0
+:scheduler.exit.scbase
+0
+:scheduler.deadcount
+0
 
-750 -1
-:handler.code
-# print out the thread id
+
+:scheduler.code
+
+mov r1 pc
+
+:moveloop
+
+li r15 :scheduler.1
+scc r1 r15
+ld r3 r1
+
+li r15 :scheduler.1.sc
+scc r1 r15
+ld r4 r1
+
+# move forward
+# 2 -> 1
+li r15 :scheduler.2
+scc r1 r15
+ld r5 r1
+
+li r15 :scheduler.1
+scc r1 r15
+sd r1 r5
+
+# 3 -> 2
+li r15 :scheduler.3
+scc r1 r15
+ld r5 r1
+
+li r15 :scheduler.2
+scc r1 r15
+sd r1 r5
+
+li r15 :scheduler.3
+scc r1 r15
+sd r1 ret
+
+# 2 -> 1
+li r15 :scheduler.2.sc
+scc r1 r15
+ld r5 r1
+
+li r15 :scheduler.1.sc
+scc r1 r15
+sd r1 r5
+
+# 3 -> 2
+li r15 :scheduler.3.sc
+scc r1 r15
+ld r5 r1
+
+li r15 :scheduler.2.sc
+scc r1 r15
+sd r1 r5
+
+# cur -> 3
+li r15 :scheduler.3.sc
+scc r1 r15
+sd r1 sc
+
+iscap r2 r3
+li r15 :moveloop
+jz r15 r2
+
+mov sc r4
+
+li r15 :scheduler.code
+retsl r3 r15
+
+:scheduler.exit
+mov r1 pc
+li r15 :scheduler.deadcount
+scc r1 r15
+ld r2 r1
+li r3 1
+add r2 r3
+sd r1 r2
+
+li r3 4
+lt r4 r2 r3
+# if deadcount < 4
+li r15 :scheduler.code
+jnz r15 r4
+
+# otherwise, return
+li r15 :scheduler.prelude.ret
+scc r1 r15
+ld r2 r1
+li r0 0
+ret r2 r0
+
+:scheduler.prelude
 # round-robin sched
+delin pc
+mov r1 pc
 
-return ret
+#li r0 :scheduler.prelude.sc
+#scc r1 r0
+#ld sc r1
+
+#li r0 :scheduler.prelude.se
+#scc r1 r0
+#ld r2 r1
+
+#li r0 :scheduler.code
+#scc r1 r0
+#sd r2 r1
+
+li r0 :scheduler.exit.scbase
+scc r1 r0
+ld r7 r1
+
+li r0 :schedulersave2
+splitl r8 r7 r0
+scc r8 r0
+
+li r0 :schedulersave3
+splitl r9 r8 r0
+scc r9 r0
+
+li r0 :schedulersave4
+splitl r10 r9 r0
+scc r10 r0
+
+# place the exit function in the cap
+li r0 :scheduler.exit
+scc r1 r0
+sd r7 r1
+sd r8 r1
+sd r9 r1
+sd r10 r1
+
+li r0 :schedulersave1.gprs
+scc r7 r0
+li r0 1
+sd r7 r0
+
+li r0 :schedulersave2.gprs
+scc r8 r0
+li r0 2
+sd r8 r0
+
+li r0 :schedulersave3.gprs
+scc r9 r0
+li r0 3
+sd r9 r0
+
+li r0 :schedulersave4.gprs
+scc r10 r0
+li r0 4
+sd r10 r0
+
+
+# place ret caps
+li r0 :scheduler.1
+scc r1 r0
+ld r3 r1
+li r0 :sealed1.ret
+scc r3 r0
+sealret r7 r1
+sd r3 r7
+sealret r3 epc
+sd r1 r3
+
+li r0 :scheduler.2
+scc r1 r0
+ld r3 r1
+li r0 :sealed2.ret
+scc r3 r0
+sealret r8 r1
+sd r3 r8
+sealret r3 epc
+sd r1 r3
+
+li r0 :scheduler.3
+scc r1 r0
+ld r3 r1
+li r0 :sealed3.ret
+sealret r9 r1
+scc r3 r0
+sd r3 r9
+sealret r3 epc
+sd r1 r3
+
+li r0 :scheduler.4
+scc r1 r0
+ld r3 r1
+li r0 :sealed4.ret
+sealret r10 r1
+scc r3 r0
+sd r3 r10
+sealret r3 epc
+sd r1 r3
+
+li r0 :scheduler.4
+scc r1 r0
+ld r3 r1
+
+li r0 :scheduler.4.sc
+scc r1 r0
+ld sc r1
+
+# save the return cap for use after all threads end
+li r0 :scheduler.prelude.ret
+scc r1 r0
+sd r1 ret
+
+li r0 :scheduler.code
+li r1 4
+retsl r3 r0
 $
 
-# --------- handler sc -----------
-800 -1
-:handlersc1
+# --------- scheduler sc -----------
+840 -1
+:schedulersc1
 0
 0
 0
-0
-:handlersc1.gprs
+:schedulersc1.gprs
 1
 $
 
 
-820 -1
-:handlersc2
+860 -1
+:schedulersc2
 0
 0
 0
-0
-:handlersc2.gprs
+:schedulersc2.gprs
 2
 $
 
-840 -1
-:handlersc3
+880 -1
+:schedulersc3
 0
 0
 0
-0
-:handlersc3.gprs
+:schedulersc3.gprs
 3
 $
 
-860 -1
-:handlersc4
-0
-0
-0
-0
-:handlersc4.gprs
-4
-$
+
 
 # ------------ main ------------
 0 -1
@@ -200,96 +440,90 @@ scc r9 r0
 li r0 :sc4
 splitl r10 r9 r0
 scc r10 r0
-li r0 :handler
+li r0 :scheduler
 splitl r11 r10 r0
-li r0 :handler.code
+li r0 :scheduler.prelude
 scc r11 r0
-li r0 :handlersc1
+li r0 :schedulersc1
 splitl r12 r11 r0
+scc r12 r0
+li r0 :schedulersc2
+splitl r13 r12 r0
+scc r13 r0
+li r0 :schedulersc3
+splitl r14 r13 r0
+scc r14 r0
+
+li r0 :schedulersave1
+splitl r15 r14 r0
+scc r15 r0
 
 delin r1
-delin r11
 
-li r0 :handlersc1
-scc r12 r0
+sd r2 r1
+sd r3 r1
+sd r4 r1
+sd r5 r1
+
+# store the fib cap inside the scheduler region
+li r0 :scheduler.1
+scc r11 r0
+sd r11 r2
+
+li r0 :scheduler.2
+scc r11 r0
+sd r11 r3
+
+li r0 :scheduler.3
+scc r11 r0
+sd r11 r4
+
+li r0 :scheduler.4
+scc r11 r0
+sd r11 r5
+
+
+li r0 :scheduler.1.sc
+scc r11 r0
+sd r11 r7
+
+li r0 :scheduler.2.sc
+scc r11 r0
+sd r11 r8
+
+li r0 :scheduler.3.sc
+scc r11 r0
+sd r11 r9
+
+li r0 :scheduler.4.sc
+scc r11 r0
+sd r11 r10
+
+li r0 :scheduler.prelude.sc
+scc r11 r0
+sd r11 r13
+
+li r0 :scheduler.prelude.se
+scc r11 r0
+sd r11 r14
+
+
+li r0 :scheduler.exit.scbase
+scc r11 r0
+sd r11 r15
+
+li r0 :scheduler.prelude
+scc r11 r0
 sd r12 r11
+
+seal r12
+
+
 
 # set up sc of main
 mov sc r6
 
-out r2
-out r1
-sd r2 r1
-li r0 :sealed1.sc
-scc r2 r0
-sd r2 r7
-li r0 :handlersc2
-splitl r13 r12 r0
-scc r13 r0
-sd r13 r11
-li r0 :sealed1.epc
-scc r2 r0
-seal r12
-sd r2 r12
-mov r12 r13
-
-sd r3 r1
-li r0 :sealed2.sc
-scc r3 r0
-sd r3 r8
-li r0 :handlersc3
-splitl r13 r12 r0
-scc r13 r0
-sd r13 r11
-li r0 :sealed2.epc
-scc r3 r0
-seal r12
-sd r3 r12
-mov r12 r13
-
-
-sd r4 r1
-li r0 :sealed3.sc
-scc r4 r0
-sd r4 r9
-li r0 :handlersc4
-splitl r13 r12 r0
-scc r13 r0
-sd r13 r11
-li r0 :sealed3.epc
-scc r4 r0
-seal r12
-sd r4 r12
-mov r12 r13
-
-sd r5 r1
-li r0 :sealed4.sc
-scc r5 r0
-sd r5 r10
-li r0 :sealed4.epc
-scc r5 r0
-seal r12
-sd r5 r12
-
-seal r2
-seal r3
-seal r4
-seal r5
-
-# store the fib cap inside the handler region
-li r0 :handler.1
-scc r11 r0
-sd r11 r3
-
-li r0 :handler.2
-scc r11 r0
-sd r11 r4
-
-li r0 :handler.3
-scc r11 r0
-sd r11 r5
-
-call r2
+call r12
 halt
 $
 
