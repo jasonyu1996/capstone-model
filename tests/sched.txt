@@ -258,18 +258,6 @@ ret r2 r0
 delin pc
 mov r1 pc
 
-#li r0 :scheduler.prelude.sc
-#scc r1 r0
-#ld sc r1
-
-#li r0 :scheduler.prelude.se
-#scc r1 r0
-#ld r2 r1
-
-#li r0 :scheduler.code
-#scc r1 r0
-#sd r2 r1
-
 li r0 :scheduler.exit.scbase
 scc r1 r0
 ld r7 r1
@@ -517,8 +505,6 @@ scc r11 r0
 sd r12 r11
 
 seal r12
-
-
 
 # set up sc of main
 mov sc r6
