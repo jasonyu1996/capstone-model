@@ -6,6 +6,7 @@
 li r0 32
 splitl r1 pc r0
 mrev r3 r1
+out r0
 lin r3
 li r1 1
 li r2 1

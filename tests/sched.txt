@@ -30,6 +30,8 @@ $
 450 -1
 :sealed1
 0
+:sealed1.id
+0
 :sealed1.epc
 0
 :sealed1.ret
@@ -41,6 +43,8 @@ $
 # thread 2 sealed region
 470 -1
 :sealed2
+0
+:sealed2.id
 0
 :sealed2.epc
 0
@@ -54,6 +58,8 @@ $
 490 -1
 :sealed3
 0
+:sealed3.id
+0
 :sealed3.epc
 0
 :sealed3.ret
@@ -65,6 +71,8 @@ $
 # thread 4 sealed region
 510 -1
 :sealed4
+0
+:sealed4.id
 0
 :sealed4.epc
 0
