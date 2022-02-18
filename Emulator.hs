@@ -34,20 +34,20 @@ data RegFile = RegFile {
 data RevNode = RevNode Int | RevNodeRoot | RevNodeNull
     deriving (Show, Eq)
 
-data RevTree = RevTree [RevNode]
+newtype RevTree = RevTree [RevNode]
     deriving (Show)
 
 data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
-    Jmp Reg | Seal Reg | SealRet Reg Reg | Call Reg | Return Reg Reg | ReturnSealed Reg Reg |
+    Jmp Reg | Seal Reg | SealRet Reg Reg | Call Reg Reg | Return Reg Reg | ReturnSealed Reg Reg |
     Lin Reg | Delin Reg | Drop Reg |
     Mrev Reg Reg | Tighten Reg Reg | Li Reg Int | Add Reg Reg |
     Lt Reg Reg Reg | Jnz Reg Reg | Jz Reg Reg | Split Reg Reg Reg | Splitl Reg Reg Reg | 
     Shrink Reg Reg Reg |
-    Init Reg | Scc Reg Reg | Lcc Reg Reg | Out Reg | Halt | Except |
+    Init Reg | Scc Reg Reg | Lcc Reg Reg | Out Reg | Halt | Except Reg |
     IsCap Reg Reg
     deriving (Show)
 
-data Mem = Mem [MWord]
+newtype Mem = Mem [MWord]
     deriving (Show)
 
 data State = State {
@@ -204,8 +204,8 @@ setMemRange (Mem meml) b s =
 -- call helper (shared between call and except)
 -- layout of sc region: bo = pc, bo + 1 = epc, bo + 2 = ret, bo + 3 = gprs
 -- upon call: load sc from mem, store ret to sc
-callHelper :: RegFile -> Mem -> RevTree -> Reg -> (State, String)
-callHelper regs mem rt r =
+callHelper :: RegFile -> Mem -> RevTree -> Reg -> MWord -> (State, String)
+callHelper regs mem rt r arg =
     let ci = getReg regs r
         co = getReg regs Sc  -- sc is not necessarily a sealed capability
         bi = capBase ci
@@ -219,7 +219,7 @@ callHelper regs mem rt r =
             epc = getMem mem $ bi + 1,
             ret = co { capType = TSealedRet r } ,  -- we do not load the ret from the sc region upon call
             -- we need to give a sealedret cap for the callee to return
-            gprs = getMemRange mem (bi + 3) gprSize
+            gprs = arg:(tail (getMemRange mem (bi + 3) gprSize))
         }
         mem1 = setMem mem bo (pc regs)
         mem2 = setMem mem1 (bo + 1) (epc regs)
@@ -257,12 +257,12 @@ returnHelper regs mem rt r retval =
             (Error, "Error return: " ++ (show ci) ++ "\n")
 
 -- all traps can go here
-trap :: RegFile -> Mem -> RevTree -> (State, String)
-trap regs mem rt =
+trap :: RegFile -> Mem -> RevTree -> MWord -> (State, String)
+trap regs mem rt arg =
     let c = epc regs
     in 
         if validCap rt c then
-            callHelper regs mem rt Epc
+            callHelper regs mem rt Epc arg
         else
             (State regs mem rt, "")
 
@@ -324,12 +324,14 @@ execInsn (State regs mem rt) (SealRet rd rs) =
     
 
 -- call
-execInsn (State regs mem rt) (Call r) =
-    callHelper (incrementPC regs) mem rt r
+execInsn (State regs mem rt) (Call rd rs) =
+    let arg = getReg regs rs
+    in callHelper (incrementPC regs) mem rt rd arg
 
 -- except
-execInsn (State regs mem rt) Except =
-    trap regs mem rt
+execInsn (State regs mem rt) (Except r) =
+    let arg = getReg regs r
+    in trap regs mem rt arg
 
 -- return
 execInsn (State regs mem rt) (Return rd rs) =
@@ -717,7 +719,7 @@ loadWordAt addr nwords mem tagMap = do
                         "sd" -> Sd r1 r2
                         "seal" -> Seal r1
                         "sealret" -> SealRet r1 r2
-                        "call" -> Call r1
+                        "call" -> Call r1 r2
                         "ret" -> Return r1 r2
                         "retsl" -> ReturnSealed r1 r2
                         "lin" -> Lin r1
@@ -737,6 +739,7 @@ loadWordAt addr nwords mem tagMap = do
                         "jmp" -> Jmp r1
                         "scc" -> Scc r1 r2
                         "lcc" -> Lcc r1 r2
+                        "except" -> Except r1
                         "out" -> Out r1
                         "iscap" -> IsCap r1 r2
                         "halt" -> Halt
@@ -792,7 +795,7 @@ execLoop :: Int -> Int -> State -> IO ()
 execLoop _ _ Error = return ()
 execLoop timestamp clockInterval st = do
     let (newState, msg) = if (clockInterval > 0) && (mod timestamp clockInterval == 0) then
-            let State regs mem rt = st in trap regs mem rt
+            let State regs mem rt = st in trap regs mem rt (Value 0) -- 0 for timer interrupt
         else  
             execute st
     putStr (if msg == "" then "" else (show timestamp) ++ ": " ++ msg)
