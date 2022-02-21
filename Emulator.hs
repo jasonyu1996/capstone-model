@@ -204,7 +204,7 @@ setMemRange (Mem meml) b s =
     in Mem (l ++ s ++ r)
 
 -- call helper (shared between call and except)
--- layout of sc region: bo = pc, bo + 1 = id, bo + 2 = epc, bo + 3 = ret, bo + 3 = gprs
+-- layout of sc region: bo = pc, bo + 1 = id, bo + 2 = epc, bo + 3 = ret, bo + 4 = gprs
 -- upon call: load sc from mem, store ret to sc
 callHelper :: State -> Reg -> MWord -> (State, String)
 callHelper (State regs mem rt idN) r arg =
@@ -232,7 +232,7 @@ callHelper (State regs mem rt idN) r arg =
     in
         if (validCap rt ci) && (capType ci) == TSealed &&
             (validCap rt co) && (writableCap co) &&
-            bi + gprSize < ei && bo + gprSize < eo then
+            bi + gprSize + 4 <= ei && bo + gprSize + 4 <= eo then
             (State newRegs newMem rt idN, "")
         else
             (Error, "Error call: " ++ (show (ci, getMem mem bi)) ++ "\n")
@@ -254,7 +254,7 @@ returnHelper (State regs mem rt idN) r retval =
         }) rret retval
         newMem = setMemRange mem bi (replicate (4 + gprSize) (Value 0)) -- clear sc to maintain linearity
     in
-        if (validCap rt ci) && bi + gprSize < ei then
+        if (validCap rt ci) && bi + gprSize + 4 <= ei then
             case capType ci of
                 TSealedRet _ -> (State newRegs mem rt idN, "")
                 _ -> (Error, "Error return: " ++ (show ci) ++ "\n")
@@ -363,13 +363,14 @@ execInsn (State regs mem rt idN) (ReturnSealed rd rs) =
         gprSize = length $ gprs regs
 
         mem1 = setMem mem scBase newPC
-        mem2 = setMem mem1 (scBase + 1) (epc regs)
-        newMem = setMemRange mem2 (scBase + 3) (gprs regs)
+        mem2 = setMem mem1 (scBase + 1) (domId regs)
+        mem3 = setMem mem2 (scBase + 2) (epc regs)
+        newMem = setMemRange mem2 (scBase + 4) (gprs regs)
 
         retval = scCap { capType = TSealed }
     in 
         if (isValue $ getReg regs rs) && (validCap rt scCap) &&
-            (scBase + gprSize + 3 < scEnd) then
+            (scBase + gprSize + 3 < scEnd) && (writableCap scCap) then
             returnHelper (State regs newMem rt idN) rd retval
         else
             (Error, "Error returnsealed\n")
