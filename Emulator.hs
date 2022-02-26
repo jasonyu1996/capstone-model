@@ -42,9 +42,11 @@ data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Jmp Reg | Seal Reg | SealRet Reg Reg | Call Reg Reg | Return Reg Reg | ReturnSealed Reg Reg |
     Lin Reg | Delin Reg | Drop Reg |
     Mrev Reg Reg | Tighten Reg Reg | Li Reg Int | Add Reg Reg |
+    Le Reg Reg Reg | Eql Reg Reg Reg |
     Lt Reg Reg Reg | Jnz Reg Reg | Jz Reg Reg | Split Reg Reg Reg | Splitl Reg Reg Reg | 
     Shrink Reg Reg Reg |
     Init Reg | Scc Reg Reg | Lcc Reg Reg | Out Reg | Halt | Except Reg |
+    Scco Reg Reg | -- offset variant of scc
     IsCap Reg Reg
     deriving (Show)
 
@@ -202,6 +204,20 @@ setMemRange (Mem meml) b s =
     let l = take b meml
         r = drop (b + (length s)) meml
     in Mem (l ++ s ++ r)
+
+rABHelper :: State -> Reg -> Reg -> Reg -> (Int -> Int -> Int) -> (State, String)
+rABHelper (State regs mem rt idN) rd ra rb f =
+    let na = getReg regs ra
+        nb = getReg regs rb
+        Value va = na
+        Value vb = nb
+        res = Value $ f va vb
+        newRegs = setReg regs rd res
+    in
+        if (isValue na) && (isValue nb) then
+            (State (incrementPC newRegs) mem rt idN, "")
+        else
+            (Error, "Error in RAB instruction\n")
 
 -- call helper (shared between call and except)
 -- layout of sc region: bo = pc, bo + 1 = id, bo + 2 = epc, bo + 3 = ret, bo + 3 = gprs
@@ -593,19 +609,18 @@ execInsn (State regs mem rt idN) (Jnz rd rs) =
         else
             (Error, "Error jnz\n")
 
+-- eq
+execInsn st (Eql rd ra rb) =
+    rABHelper st rd ra rb (\a b -> if a == b then 1 else 0)
+
+-- le
+execInsn st (Le rd ra rb) =
+    rABHelper st rd ra rb (\a b -> if a <= b then 1 else 0)
+
+
 -- lt
-execInsn (State regs mem rt idN) (Lt rd ra rb) =
-    let na = getReg regs ra
-        nb = getReg regs rb
-        Value va = na
-        Value vb = nb
-        res = Value (if va < vb then 1 else 0)
-        newRegs = setReg regs rd res
-    in
-        if (isValue na) && (isValue nb) then
-            (State (incrementPC newRegs) mem rt idN, "")
-        else
-            (Error, "Error lt\n")
+execInsn st (Lt rd ra rb) =
+    rABHelper st rd ra rb (\a b -> if a < b then 1 else 0)
 
 -- lcc
 execInsn (State regs mem rt idN) (Lcc rd rs) =
@@ -631,6 +646,20 @@ execInsn (State regs mem rt idN) (Scc rd rs) =
             (State (incrementPC newRegs) mem rt idN, "")
         else
             (Error, "Error scc\n")
+
+-- scco
+execInsn (State regs mem rt idN) (Scc rd rs) =
+    let c = getReg regs rd
+        n = getReg regs rs
+        cType = capType c
+        Value v = n
+        newC = c { capCursor = v + (capBase c) }
+        newRegs = setReg regs rd newC
+    in
+        if (validCap rt c) && (isValue n) && (cType `elem` [TLin, TNon]) then
+            (State (incrementPC newRegs) mem rt idN, "")
+        else
+            (Error, "Error scco\n")
 
 -- out
 execInsn (State regs mem rt idN) (Out r) =
@@ -745,10 +774,13 @@ loadWordAt addr nwords mem tagMap = do
                         "li" -> Li r1 v
                         "add" -> Add r1 r2
                         "lt" -> Lt r1 r2 r3
+                        "le" -> Le r1 r2 r3
+                        "eq" -> Eql r1 r2 r3
                         "jnz" -> Jnz r1 r2
                         "jz" -> Jz r1 r2
                         "jmp" -> Jmp r1
                         "scc" -> Scc r1 r2
+                        "scco" -> Scco r1 r2
                         "lcc" -> Lcc r1 r2
                         "except" -> Except r1
                         "out" -> Out r1
