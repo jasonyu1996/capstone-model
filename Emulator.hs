@@ -1,5 +1,6 @@
 import Data.Char
 import Data.Map (Map)
+import Data.Bits
 import qualified Data.Map as Map
 
 data CapType = TLin | TNon | TRev | TSealed | TSealedRet Reg | TUninit 
@@ -44,13 +45,13 @@ data Immediate = Integer Int | Tag String
 data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Jmp Reg | Seal Reg | SealRet Reg Reg | Call Reg Reg | Return Reg Reg | ReturnSealed Reg Reg |
     Lin Reg | Delin Reg | Drop Reg |
-    Mrev Reg Reg | Tighten Reg Reg | Li Reg Immediate | Add Reg Reg |
+    Mrev Reg Reg | Tighten Reg Reg | Li Reg Immediate | Add Reg Reg | Sub Reg Reg |
     Le Reg Reg Reg | Eql Reg Reg Reg |
     Lt Reg Reg Reg | Jnz Reg Reg | Jz Reg Reg | Split Reg Reg Reg | Splitl Reg Reg Reg | 
     Shrink Reg Reg Reg |
     Init Reg | Scc Reg Reg | Lcc Reg Reg | Out Reg | Halt | Except Reg |
     Scco Reg Reg | -- offset variant of scc
-    IsCap Reg Reg
+    IsCap Reg Reg | And Reg Reg | Or Reg Reg
     deriving (Show)
 
 newtype Mem = Mem [MWord]
@@ -207,6 +208,22 @@ setMemRange (Mem meml) b s =
     let l = take b meml
         r = drop (b + (length s)) meml
     in Mem (l ++ s ++ r)
+
+
+dSHelper :: State -> Reg -> Reg -> (Int -> Int -> Int) -> (State, String)
+dSHelper (State regs mem rt idN) rd rs f =
+    let n1 = getReg regs rs
+        n2 = getReg regs rd
+        Value v1 = n1
+        Value v2 = n2
+        res = Value $ f v2 v1
+        newRegs = setReg regs rd res
+    in
+        if (isValue n1) && (isValue n2) then
+            (State (incrementPC newRegs) mem rt idN, "")
+        else
+            (Error, "Error in DS instruction\n")
+
 
 rABHelper :: State -> Reg -> Reg -> Reg -> (Int -> Int -> Int) -> (State, String)
 rABHelper (State regs mem rt idN) rd ra rb f =
@@ -548,19 +565,6 @@ execInsn (State regs mem rt idN) (Li r (Integer n)) =
     let newRegs = setReg regs r (Value n) in (State (incrementPC newRegs) mem rt idN, "")
 
 
--- add
-execInsn (State regs mem rt idN) (Add rd rs) =
-    let n1 = getReg regs rs
-        n2 = getReg regs rd
-        Value v1 = n1
-        Value v2 = n2
-        res = Value (v1 + v2)
-        newRegs = setReg regs rd res
-    in
-        if (isValue n1) && (isValue n2) then
-            (State (incrementPC newRegs) mem rt idN, "")
-        else
-            (Error, "Error add\n")
 
 -- jmp
 execInsn (State regs mem rt idN) (Jmp r) =
@@ -625,6 +629,23 @@ execInsn st (Le rd ra rb) =
 -- lt
 execInsn st (Lt rd ra rb) =
     rABHelper st rd ra rb (\a b -> if a < b then 1 else 0)
+
+
+-- add
+execInsn st (Add rd rs) =
+    dSHelper st rd rs (\a b -> a + b)
+
+-- sub
+execInsn st (Sub rd rs) =
+    dSHelper st rd rs (\a b -> a - b)
+
+-- and
+execInsn st (And rd rs) =
+    dSHelper st rd rs (\a b -> a .&. b)
+
+-- or
+execInsn st (Or rd rs) =
+    dSHelper st rd rs (\a b -> a .|. b)
 
 -- lcc
 execInsn (State regs mem rt idN) (Lcc rd rs) =
@@ -782,6 +803,9 @@ loadWordAt addr nwords mem tagMap = do
                         "init" -> Init r1
                         "li" -> Li r1 v
                         "add" -> Add r1 r2
+                        "sub" -> Sub r1 r2
+                        "and" -> And r1 r2
+                        "or" -> Or r1 r2
                         "lt" -> Lt r1 r2 r3
                         "le" -> Le r1 r2 r3
                         "eq" -> Eql r1 r2 r3
