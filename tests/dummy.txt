@@ -1,5 +1,6 @@
 # memsize, gprcnt, initpc, segcnt
 8 4 0 0 2
+0 8 0
 # first seg
 # baseaddr, segsize
 0 2

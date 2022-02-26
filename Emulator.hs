@@ -652,7 +652,7 @@ execInsn (State regs mem rt idN) (Scc rd rs) =
             (Error, "Error scc\n")
 
 -- scco
-execInsn (State regs mem rt idN) (Scc rd rs) =
+execInsn (State regs mem rt idN) (Scco rd rs) =
     let c = getReg regs rd
         n = getReg regs rs
         cType = capType c
@@ -721,6 +721,7 @@ readInts =
 -- starting address, size (number of words)
 -- list of words
 -- each word can be a value or an instruction (caps are not loaded)
+-- TODO: init program counter with tag
 
 stringToReg :: String -> Reg
 stringToReg s =
@@ -731,6 +732,12 @@ stringToReg s =
         "sc" -> Sc
         _ -> GPR (read (tail s) :: Int)
 
+
+immediateFromStr :: String -> Immediate
+immediateFromStr s =
+   case s of
+        ':':_ -> Tag $ s
+        _ -> Integer (read s :: Int)
 
 loadWordAt :: Int -> Int -> Mem -> (Map String Int) -> IO (Mem, (Map String Int))
 loadWordAt addr nwords mem tagMap = do
@@ -753,9 +760,7 @@ loadWordAt addr nwords mem tagMap = do
                 r1 <- return (stringToReg (tokens !! 1))
                 r2 <- return (stringToReg (tokens !! 2))
                 r3 <- return (stringToReg (tokens !! 3))
-                v <- return (case (tokens !! 2) of
-                    ':':_ -> Tag $ tokens !! 2
-                    _ -> Integer (read (tokens !! 2) :: Int))
+                v <- return (immediateFromStr (tokens !! 2))
                 return (Inst (
                     case (head tokens) of
                         "mov" -> Mov r1 r2
@@ -817,33 +822,61 @@ resolveTags (Mem mem) tagMap =
         Nothing -> Inst (Li reg (Integer 0))
        _ -> x) mem)
 
+type CapBound = (Immediate, Immediate, Immediate)
+loadCaps :: Int -> IO [CapBound]
+loadCaps numCaps =
+    if numCaps == 0 then
+        return []
+    else do
+        line <- getSignificantLine
+        immediates <- return (map (\w -> (immediateFromStr w)) (words line))
+        moreCaps <- loadCaps $ numCaps - 1
+        return ((immediates !! 0, immediates !! 1, immediates !! 2):moreCaps)
+
+intFromImmediate :: Immediate -> Map String Int -> Int
+intFromImmediate imm tagMap = 
+    case imm of
+        Integer i -> i
+        Tag tag ->
+            case Map.lookup tag tagMap of
+                Just n -> n
+                Nothing -> 0
+
 loadState :: IO (State, Int)
 loadState = do
     -- ugly
     inputs <- readInts
     memSize <- return (inputs !! 0)
     gprCount <- return (inputs !! 1)
-    initPC <- return (inputs !! 2)
-    clockInterval <- return (inputs !! 3)
+    clockInterval <- return (inputs !! 2)
+    numCaps <- return (inputs !! 3)
     numSegs <- return (inputs !! 4)
-    capPC <- return (Cap {
-            capType = TLin,
-            capBase = 0,
-            capEnd = memSize,
-            capCursor = initPC,
-            capPerm = PermRWX,
-            capNode = 0
-    })
+    capBounds <- loadCaps $ numCaps + 1
+    (mem, tagMap) <- loadMemory numSegs (Mem (replicate memSize (Value 0))) Map.empty
+    caps <- return (map (\(idx, (base_imm, end_imm, cursor_imm)) ->
+        let base = intFromImmediate base_imm tagMap
+            end = intFromImmediate end_imm tagMap
+            cursor = intFromImmediate cursor_imm tagMap
+        in
+            Cap {
+                capType = TLin,
+                capBase = base,
+                capEnd = end,
+                capCursor = cursor,
+                capPerm = PermRWX,
+                capNode = idx
+            } 
+        ) (zip [0..] capBounds))
+    capPC <- return $ head caps
     regs <- return (RegFile {
         pc = capPC,
         domId = Value 0,
         sc = Value 0, -- todo need to set this up
         epc = Value 0,
         ret = Value 0,
-        gprs = replicate gprCount (Value 0)
+        gprs = (tail caps) ++ (replicate (gprCount - numCaps) (Value 0))
     })
-    (mem, tagMap) <- loadMemory numSegs (Mem (replicate memSize (Value 0))) Map.empty
-    let rt = RevTree [RevNodeRoot]
+    let rt = RevTree $ replicate (numCaps + 1) RevNodeRoot
     return (State regs (resolveTags mem tagMap) rt 0, clockInterval)
 
 execLoop :: Int -> Int -> State -> IO ()
