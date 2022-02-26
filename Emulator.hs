@@ -38,10 +38,13 @@ data RevNode = RevNode Int | RevNodeRoot | RevNodeNull
 newtype RevTree = RevTree [RevNode]
     deriving (Show)
 
+data Immediate = Integer Int | Tag String
+    deriving (Show)
+
 data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Jmp Reg | Seal Reg | SealRet Reg Reg | Call Reg Reg | Return Reg Reg | ReturnSealed Reg Reg |
     Lin Reg | Delin Reg | Drop Reg |
-    Mrev Reg Reg | Tighten Reg Reg | Li Reg Int | Add Reg Reg |
+    Mrev Reg Reg | Tighten Reg Reg | Li Reg Immediate | Add Reg Reg |
     Le Reg Reg Reg | Eql Reg Reg Reg |
     Lt Reg Reg Reg | Jnz Reg Reg | Jz Reg Reg | Split Reg Reg Reg | Splitl Reg Reg Reg | 
     Shrink Reg Reg Reg |
@@ -541,7 +544,7 @@ execInsn (State regs mem rt idN) (Init r) =
             (Error, "Error init\n")
 
 -- li
-execInsn (State regs mem rt idN) (Li r n) =
+execInsn (State regs mem rt idN) (Li r (Integer n)) =
     let newRegs = setReg regs r (Value n) in (State (incrementPC newRegs) mem rt idN, "")
 
 
@@ -751,8 +754,8 @@ loadWordAt addr nwords mem tagMap = do
                 r2 <- return (stringToReg (tokens !! 2))
                 r3 <- return (stringToReg (tokens !! 3))
                 v <- return (case (tokens !! 2) of
-                    ':':_ -> let Just n = Map.lookup (tokens !! 2) tagMap in n
-                    _ -> read (tokens !! 2) :: Int)
+                    ':':_ -> Tag $ tokens !! 2
+                    _ -> Integer (read (tokens !! 2) :: Int))
                 return (Inst (
                     case (head tokens) of
                         "mov" -> Mov r1 r2
@@ -792,20 +795,27 @@ loadWordAt addr nwords mem tagMap = do
             memLoaded <- return (setMem mem addr w) 
             loadWordAt (addr + 1) (nwords - 1) memLoaded tagMap
 
-loadMemory :: Int -> Mem -> Map String Int -> IO Mem
+loadMemory :: Int -> Mem -> Map String Int -> IO (Mem, Map String Int)
 loadMemory nsegs mem tagMap = do
     if nsegs == 0 then do
-        return mem
+        return (mem, tagMap)
     else do
         inputs <- readInts
         startAddr <- return (inputs !! 0)
         segSize <- return (inputs !! 1)
         if startAddr < 0 then
-            return mem
+            return (mem, tagMap)
         else do
             (memLoaded, newTagMap) <- loadWordAt startAddr segSize mem tagMap
             loadMemory (nsegs - 1) memLoaded newTagMap
     
+resolveTags :: Mem -> Map String Int -> Mem
+resolveTags (Mem mem) tagMap =
+    Mem (map (\x -> case x of
+       Inst (Li reg (Tag tag)) -> case Map.lookup tag tagMap of
+        Just n -> Inst (Li reg (Integer n))
+        Nothing -> Inst (Li reg (Integer 0))
+       _ -> x) mem)
 
 loadState :: IO (State, Int)
 loadState = do
@@ -832,9 +842,9 @@ loadState = do
         ret = Value 0,
         gprs = replicate gprCount (Value 0)
     })
-    mem <- loadMemory numSegs (Mem (replicate memSize (Value 0))) Map.empty
+    (mem, tagMap) <- loadMemory numSegs (Mem (replicate memSize (Value 0))) Map.empty
     let rt = RevTree [RevNodeRoot]
-    return (State regs mem rt 0, clockInterval)
+    return (State regs (resolveTags mem tagMap) rt 0, clockInterval)
 
 execLoop :: Int -> Int -> State -> IO ()
 execLoop _ _ Error = return ()
