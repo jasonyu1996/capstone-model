@@ -48,6 +48,7 @@ data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Mrev Reg Reg | Tighten Reg Reg | Li Reg Immediate | Add Reg Reg | Sub Reg Reg |
     Le Reg Reg Reg | Eql Reg Reg Reg |
     Lt Reg Reg Reg | Jnz Reg Reg | Jz Reg Reg | Split Reg Reg Reg | Splitl Reg Reg Reg | 
+    Splito Reg Reg Reg | Splitlo Reg Reg Reg | 
     Shrink Reg Reg Reg |
     Init Reg | Scc Reg Reg | Lcc Reg Reg | Out Reg | Halt | Except Reg |
     Scco Reg Reg | -- offset variant of scc
@@ -448,7 +449,7 @@ execInsn (State regs mem rt idN) (Drop r) =
                 newRegs = setReg regs r (Value 0)
             in (State (incrementPC newRegs) mem newRt idN, "")
         else
-            (Error, "Error drop\n")
+            (Error, "Error drop " ++ (show (r, c)) ++ "\n")
 
 -- mrev
 execInsn (State regs mem rt idN) (Mrev rd rs) =
@@ -463,7 +464,7 @@ execInsn (State regs mem rt idN) (Mrev rd rs) =
         if (validCap rt c) && (capType c) == TLin then
             (State (incrementPC newRegs) mem newRt idN, "")
         else
-            (Error, "Error mrev\n")
+            (Error, "Error mrev" ++ (show (rd, c)) ++ "\n")
 
 -- tighten
 execInsn (State regs mem rt idN) (Tighten rd rs) =
@@ -500,7 +501,34 @@ execInsn (State regs mem rt idN) (Splitl rd rs rp) =
         newRegs = setReg (setReg regs rd c1) rs c2
     in
         if (validCap rt c) && (capType c) == TLin && (isValue pn) &&
-            b < p && p < e then
+            b <= p && p <= e then
+            (State (incrementPC newRegs) mem newRt idN, "")
+        else
+            (Error, "Error splitl: " ++ (show (rd, rs, rp)) ++ "\n")
+
+
+
+-- splitlo
+execInsn (State regs mem rt idN) (Splitlo rd rs rp) =
+    let c = getReg regs rs
+        pn = getReg regs rp
+        Value p = pn
+        cNode = capNode c
+        parentNode = getRevNode rt cNode
+        (newRt, newNode) = addRevNode rt parentNode
+        b = capBase c
+        e = capEnd c
+        c2 = c {
+            capEnd = b + p
+        }
+        c1 = c {
+            capBase = b + p,
+            capNode = newNode
+        }
+        newRegs = setReg (setReg regs rd c1) rs c2
+    in
+        if (validCap rt c) && (capType c) == TLin && (isValue pn) &&
+            b <= b + p && b + p <= e then
             (State (incrementPC newRegs) mem newRt idN, "")
         else
             (Error, "Error splitl: " ++ (show (rd, rs, rp)) ++ "\n")
@@ -525,7 +553,7 @@ execInsn (State regs mem rt idN) (Split rd rs rp) =
         newRegs = setReg (setReg regs rd c1) rs c2
     in
         if (validCap rt c) && (capType c) == TLin && (isValue pn) &&
-            b < p && p < e then
+            b <= p && p <= e then
             (State (incrementPC newRegs) mem newRt idN, "")
         else
             (Error, "Error split\n")
@@ -799,6 +827,8 @@ loadWordAt addr nwords mem tagMap = do
                         "tighten" -> Tighten r1 r2
                         "split" -> Split r1 r2 r3
                         "splitl" -> Splitl r1 r2 r3
+                        "splitlo" -> Splitlo r1 r2 r3
+                        "splito" -> Splito r1 r2 r3
                         "shrink" -> Shrink r1 r2 r3
                         "init" -> Init r1
                         "li" -> Li r1 v
