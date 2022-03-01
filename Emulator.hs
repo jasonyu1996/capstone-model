@@ -444,7 +444,7 @@ execInsn (State regs mem rt idN) (Drop r) =
         cNode = capNode c
         parentNode = getRevNode rt cNode
     in
-        if (validCap rt c) && ((capType c) `elem` [TLin, TRev, TSealed, TUninit]) then
+        if (validCap rt c) && ((capType c) `elem` [TLin, TRev, TSealed]) then
             let newRt = remove (reparent rt (RevNode cNode) parentNode) cNode
                 newRegs = setReg regs r (Value 0)
             in (State (incrementPC newRegs) mem newRt idN, "")
