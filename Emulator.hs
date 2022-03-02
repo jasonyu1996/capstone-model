@@ -46,11 +46,12 @@ data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Jmp Reg | Seal Reg | SealRet Reg Reg | Call Reg Reg | Return Reg Reg | ReturnSealed Reg Reg |
     Lin Reg | Delin Reg | Drop Reg |
     Mrev Reg Reg | Tighten Reg Reg | Li Reg Immediate | Add Reg Reg | Sub Reg Reg |
+    Mult Reg Reg |
     Le Reg Reg Reg | Eql Reg Reg Reg |
     Lt Reg Reg Reg | Jnz Reg Reg | Jz Reg Reg | Split Reg Reg Reg | Splitl Reg Reg Reg | 
     Splito Reg Reg Reg | Splitlo Reg Reg Reg | 
     Shrink Reg Reg Reg |
-    Init Reg | Scc Reg Reg | Lcc Reg Reg | Out Reg | Halt | Except Reg |
+    Init Reg | Scc Reg Reg | Lcc Reg Reg |Lce Reg Reg |  Lcb Reg Reg | Out Reg | Halt | Except Reg |
     Scco Reg Reg | -- offset variant of scc
     IsCap Reg Reg | And Reg Reg | Or Reg Reg
     deriving (Show)
@@ -210,6 +211,17 @@ setMemRange (Mem meml) b s =
         r = drop (b + (length s)) meml
     in Mem (l ++ s ++ r)
 
+
+lcxHelper :: State -> Reg -> Reg -> (MWord -> Int) -> (State, String)
+lcxHelper (State regs mem rt idN) rd rs query =
+    let c = getReg regs rs
+        res = Value (query c)
+        newRegs = setReg regs rd res
+    in
+        if validCap rt c then
+            (State (incrementPC newRegs) mem rt idN, "")
+        else
+            (Error, "Error lcx\n")
 
 dSHelper :: State -> Reg -> Reg -> (Int -> Int -> Int) -> (State, String)
 dSHelper (State regs mem rt idN) rd rs f =
@@ -667,6 +679,10 @@ execInsn st (Add rd rs) =
 execInsn st (Sub rd rs) =
     dSHelper st rd rs (\a b -> a - b)
 
+-- mult
+execInsn st (Mult rd rs) =
+    dSHelper st rd rs (\a b -> a * b)
+
 -- and
 execInsn st (And rd rs) =
     dSHelper st rd rs (\a b -> a .&. b)
@@ -675,16 +691,17 @@ execInsn st (And rd rs) =
 execInsn st (Or rd rs) =
     dSHelper st rd rs (\a b -> a .|. b)
 
+-- lce
+execInsn st (Lce rd rs) =
+    lcxHelper st rd rs capEnd
+
+-- lcb
+execInsn st (Lcb rd rs) =
+    lcxHelper st rd rs capBase
+
 -- lcc
-execInsn (State regs mem rt idN) (Lcc rd rs) =
-    let c = getReg regs rs
-        res = Value (capCursor c)
-        newRegs = setReg regs rd res
-    in
-        if validCap rt c then
-            (State (incrementPC newRegs) mem rt idN, "")
-        else
-            (Error, "Error lcc\n")
+execInsn st (Lcc rd rs) =
+    lcxHelper st rd rs capCursor
 
 -- scc
 execInsn (State regs mem rt idN) (Scc rd rs) =
@@ -833,6 +850,7 @@ loadWordAt addr nwords mem tagMap = do
                         "init" -> Init r1
                         "li" -> Li r1 v
                         "add" -> Add r1 r2
+                        "mult" -> Mult r1 r2
                         "sub" -> Sub r1 r2
                         "and" -> And r1 r2
                         "or" -> Or r1 r2
@@ -845,6 +863,8 @@ loadWordAt addr nwords mem tagMap = do
                         "scc" -> Scc r1 r2
                         "scco" -> Scco r1 r2
                         "lcc" -> Lcc r1 r2
+                        "lce" -> Lce r1 r2
+                        "lcb" -> Lcb r1 r2
                         "except" -> Except r1
                         "out" -> Out r1
                         "iscap" -> IsCap r1 r2
