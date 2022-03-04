@@ -45,13 +45,13 @@ data Immediate = Integer Int | Tag String
 data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Jmp Reg | Seal Reg | SealRet Reg Reg | Call Reg Reg | Return Reg Reg | ReturnSealed Reg Reg |
     Lin Reg | Delin Reg | Drop Reg |
-    Mrev Reg Reg | Tighten Reg Reg | Li Reg Immediate | Add Reg Reg | Sub Reg Reg |
+    Mrev Reg Reg | Tighten Reg Reg | Li Reg Immediate | Add Reg Reg | Sub Reg Reg | Div Reg Reg |
     Mult Reg Reg |
     Le Reg Reg Reg | Eql Reg Reg Reg |
     Lt Reg Reg Reg | Jnz Reg Reg | Jz Reg Reg | Split Reg Reg Reg | Splitl Reg Reg Reg | 
     Splito Reg Reg Reg | Splitlo Reg Reg Reg | 
     Shrink Reg Reg Reg |
-    Init Reg | Scc Reg Reg | Lcc Reg Reg |Lce Reg Reg |  Lcb Reg Reg | Out Reg | Halt | Except Reg |
+    Init Reg | Scc Reg Reg | Lcc Reg Reg |Lce Reg Reg |  Lcb Reg Reg | Lcn Reg Reg | Out Reg | Halt | Except Reg |
     Scco Reg Reg | -- offset variant of scc
     IsCap Reg Reg | And Reg Reg | Or Reg Reg
     deriving (Show)
@@ -250,7 +250,7 @@ rABHelper (State regs mem rt idN) rd ra rb f =
         if (isValue na) && (isValue nb) then
             (State (incrementPC newRegs) mem rt idN, "")
         else
-            (Error, "Error in RAB instruction\n")
+            (State (incrementPC (setReg regs rd $ Value 0)) mem rt idN, "")
 
 -- call helper (shared between call and except)
 -- layout of sc region: bo = pc, bo + 1 = id, bo + 2 = epc, bo + 3 = ret, bo + 4 = gprs
@@ -442,11 +442,17 @@ execInsn (State regs mem rt idN) (Lin r) =
 -- delin
 execInsn (State regs mem rt idN) (Delin r) =
     let c = getReg regs r
+        cNode = capNode c
+        parent = getRevNode rt cNode
+        newRt = setRevNode rt cNode $ case parent of
+            RevNode n -> getRevNode rt n 
+            _ -> parent
+
     in
         if (validCap rt c) && (capType c) == TLin then
             let newC = c { capType = TNon }
                 newRegs = setReg regs r newC
-            in (State (incrementPC newRegs) mem rt idN, "")
+            in (State (incrementPC newRegs) mem newRt idN, "")
         else
             (Error, "Error delin\n")
                     
@@ -675,6 +681,10 @@ execInsn st (Lt rd ra rb) =
 execInsn st (Add rd rs) =
     dSHelper st rd rs (\a b -> a + b)
 
+-- div
+execInsn st (Div rd rs) =
+    dSHelper st rd rs (\a b -> a `div` b)
+
 -- sub
 execInsn st (Sub rd rs) =
     dSHelper st rd rs (\a b -> a - b)
@@ -694,6 +704,10 @@ execInsn st (Or rd rs) =
 -- lce
 execInsn st (Lce rd rs) =
     lcxHelper st rd rs capEnd
+
+-- lcn
+execInsn st (Lcn rd rs) =
+    lcxHelper st rd rs (\c -> (capEnd c) - (capBase c))
 
 -- lcb
 execInsn st (Lcb rd rs) =
@@ -851,6 +865,7 @@ loadWordAt addr nwords mem tagMap = do
                         "li" -> Li r1 v
                         "add" -> Add r1 r2
                         "mult" -> Mult r1 r2
+                        "div" -> Div r1 r2
                         "sub" -> Sub r1 r2
                         "and" -> And r1 r2
                         "or" -> Or r1 r2
@@ -865,6 +880,7 @@ loadWordAt addr nwords mem tagMap = do
                         "lcc" -> Lcc r1 r2
                         "lce" -> Lce r1 r2
                         "lcb" -> Lcb r1 r2
+                        "lcn" -> Lcn r1 r2
                         "except" -> Except r1
                         "out" -> Out r1
                         "iscap" -> IsCap r1 r2
