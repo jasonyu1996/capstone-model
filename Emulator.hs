@@ -33,7 +33,10 @@ data RegFile = RegFile {
     gprs :: [MWord]
 } deriving (Show)
 
-data RevNode = RevNode Int | RevNodeRoot | RevNodeNull
+data RevNodeType = RNNonLin | RNLin
+    deriving (Show, Eq)
+
+data RevNode = RevNode Int RevNodeType | RevNodeRoot | RevNodeNull
     deriving (Show, Eq)
 
 newtype RevTree = RevTree [RevNode]
@@ -153,7 +156,7 @@ revokedCap rt rn =
     case rn of
         RevNodeRoot -> False
         RevNodeNull -> True
-        RevNode n -> revokedCap rt parent where parent = getRevNode rt n
+        RevNode n _ -> revokedCap rt parent where parent = getRevNode rt n
     
 
 validCap :: RevTree -> MWord -> Bool
@@ -190,9 +193,9 @@ decodePerm 2 = PermRX
 decodePerm 3 = PermRWX
 decodePerm _ = PermNA
 
-reparent :: RevTree -> RevNode -> RevNode -> RevTree
+reparent :: RevTree -> Int -> RevNode -> RevTree
 reparent (RevTree rtl) n newN =
-    RevTree (map (\x -> if x == n then newN else x) rtl)
+    RevTree (map (\x -> if (x == RevNode n RNNonLin) || (x == RevNode n RNLin) then newN else x) rtl)
 
 remove :: RevTree -> Int -> RevTree
 remove rt n = setRevNode rt n RevNodeNull
@@ -429,10 +432,10 @@ execInsn (State regs mem rt idN) (Lin r) =
     let c = getReg regs r
         cNode = capNode c
         RevTree rtl = rt
-        rtChanged = (RevNode cNode) `elem` rtl
+        rtChanged = (RevNode cNode RNLin) `elem` rtl
         newC = c { capType = if rtChanged then TUninit else TLin }
         newRegs = setReg regs r newC
-        newRt = reparent rt (RevNode cNode) RevNodeNull
+        newRt = reparent rt cNode RevNodeNull 
     in
         if (validCap rt c) && (capType c) == TRev then
             (State (incrementPC newRegs) mem newRt idN, "")
@@ -443,10 +446,10 @@ execInsn (State regs mem rt idN) (Lin r) =
 execInsn (State regs mem rt idN) (Delin r) =
     let c = getReg regs r
         cNode = capNode c
-        parent = getRevNode rt cNode
-        newRt = setRevNode rt cNode $ case parent of
-            RevNode n -> getRevNode rt n 
-            _ -> parent
+        rnode = getRevNode rt cNode
+        newRt = setRevNode rt cNode $ case rnode of
+            RevNode n _ -> RevNode n RNNonLin
+            _ -> rnode
 
     in
         if (validCap rt c) && (capType c) == TLin then
@@ -463,7 +466,7 @@ execInsn (State regs mem rt idN) (Drop r) =
         parentNode = getRevNode rt cNode
     in
         if (validCap rt c) && ((capType c) `elem` [TLin, TRev, TSealed]) then
-            let newRt = remove (reparent rt (RevNode cNode) parentNode) cNode
+            let newRt = remove (reparent rt cNode parentNode) cNode
                 newRegs = setReg regs r (Value 0)
             in (State (incrementPC newRegs) mem newRt idN, "")
         else
@@ -475,7 +478,7 @@ execInsn (State regs mem rt idN) (Mrev rd rs) =
         cNode = capNode c
         parentNode = getRevNode rt cNode
         (rt0, newNode) = addRevNode rt parentNode
-        newRt = setRevNode rt0 cNode (RevNode newNode)
+        newRt = setRevNode rt0 cNode (RevNode newNode RNLin)
         newC = c { capType = TRev, capNode = newNode }
         newRegs = setReg regs rd newC
     in
