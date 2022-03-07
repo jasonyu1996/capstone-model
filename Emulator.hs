@@ -271,16 +271,15 @@ callHelper (State regs mem rt idN) r arg =
             pc = getMem mem bi,
             sc = ci { capType = TLin },
             domId = getMem mem $ bi + 1,
-            epc = getMem mem $ bi + 2,
+            epc = if r == Epc then getMem mem $ bi + 2 else epc regs,
             ret = co { capType = TSealedRet r } ,  -- we do not load the ret from the sc region upon call
             -- we need to give a sealedret cap for the callee to return
             gprs = arg:(tail (getMemRange mem (bi + 4) gprSize))
         }
         mem0 = setMem mem bo (pc regs)
         mem1 = setMem mem0 (bo + 1) (domId regs)
-        mem2 = setMem mem1 (bo + 2) (epc regs)
-        mem3 = setMem mem2 (bo + 3) (ret regs)
-        newMem = setMemRange mem3 (bo + 4) (gprs regs)
+        mem2 = setMem mem1 (bo + 3) (ret regs)
+        newMem = setMemRange mem2 (bo + 4) (gprs regs)
     in
         if (validCap rt ci) && (capType ci) == TSealed &&
             (validCap rt co) && (writableCap co) &&
@@ -300,7 +299,7 @@ returnHelper (State regs mem rt idN) r retval =
             pc = getMem mem bi,
             sc = ci { capType = TLin },
             domId = getMem mem $ bi + 1,
-            epc = getMem mem $ bi + 2,
+            epc = if r == Epc then getMem mem $ bi + 2 else epc regs,
             ret = getMem mem $ bi + 3,
             gprs = getMemRange mem (bi + 4) gprSize
         }) rret retval
