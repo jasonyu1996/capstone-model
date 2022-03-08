@@ -286,7 +286,7 @@ callHelper (State regs mem rt idN) r arg =
             bi + gprSize + 4 <= ei && bo + gprSize + 4 <= eo then
             (State newRegs newMem rt idN, "")
         else
-            (Error, "Error call: " ++ (show (ci, getMem mem bi)) ++ "\n")
+            (Error, "Error call: " ++ (show (ci, getMem mem bi, co)) ++ "\n")
 
 returnHelper :: State -> Reg -> MWord -> (State, String)
 returnHelper (State regs mem rt idN) r retval =
@@ -310,7 +310,7 @@ returnHelper (State regs mem rt idN) r retval =
                 TSealedRet _ -> (State newRegs mem rt idN, "")
                 _ -> (Error, "Error return: " ++ (show ci) ++ "\n")
         else
-            (Error, "Error return: " ++ (show ci) ++ "\n")
+            (Error, "Error return: " ++ (show (ci, validCap rt ci)) ++ "\n")
 
 -- all traps can go here
 trap :: State -> MWord -> (State, String)
@@ -464,12 +464,13 @@ execInsn (State regs mem rt idN) (Drop r) =
         cNode = capNode c
         parentNode = getRevNode rt cNode
     in
-        if (validCap rt c) && ((capType c) `elem` [TLin, TRev, TSealed]) then
+        if (validCap rt c) && ((capType c) `elem` [TLin, TRev, TSealed, TUninit]) then -- FIXME: this is temporary: we do not want to allow
+            -- uninitialised capabilities to be dropped
             let newRt = remove (reparent rt cNode parentNode) cNode
                 newRegs = setReg regs r (Value 0)
             in (State (incrementPC newRegs) mem newRt idN, "")
         else
-            (Error, "Error drop " ++ (show (r, c)) ++ "\n")
+            (State (incrementPC regs) mem rt idN, "") -- never fails
 
 -- mrev
 execInsn (State regs mem rt idN) (Mrev rd rs) =
@@ -745,7 +746,7 @@ execInsn (State regs mem rt idN) (Scco rd rs) =
         if (validCap rt c) && (isValue n) && (cType `elem` [TLin, TNon]) then
             (State (incrementPC newRegs) mem rt idN, "")
         else
-            (Error, "Error scco\n")
+            (Error, "Error scco " ++ (show (rd, rs)) ++ "\n")
 
 -- out
 execInsn (State regs mem rt idN) (Out r) =
