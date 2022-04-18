@@ -620,7 +620,7 @@ execInsn (State regs mem rt idN) (Jmp r) =
     let n = getReg regs r
         Value v = n
         curPc = getReg regs Pc
-        newPc = curPc { capCursor = v }
+        newPc = curPc { capCursor = (capCursor curPc) + v }
         newRegs = setReg regs Pc newPc
     in
         if (isValue n) && (validCap rt curPc) then
@@ -636,7 +636,7 @@ execInsn (State regs mem rt idN) (Jz rd rs) =
         Value vs = ns
         Value vd = nd
         curPc = getReg regs Pc
-        newPc = curPc { capCursor = vd }
+        newPc = curPc { capCursor = (capCursor curPc) + vd }
         newRegs = if vs /= 0 then
                 incrementPC regs
             else
@@ -645,7 +645,7 @@ execInsn (State regs mem rt idN) (Jz rd rs) =
         if (isValue ns) && (isValue nd) && (validCap rt curPc) then
             (State newRegs mem rt idN, "")
         else
-            (Error, "Error jnz\n")
+            (Error, "Error jz\n")
 
 
 -- jnz
@@ -655,7 +655,7 @@ execInsn (State regs mem rt idN) (Jnz rd rs) =
         Value vs = ns
         Value vd = nd
         curPc = getReg regs Pc
-        newPc = curPc { capCursor = vd }
+        newPc = curPc { capCursor = (capCursor curPc) + vd }
         newRegs = if vs == 0 then
                 incrementPC regs
             else
@@ -819,6 +819,7 @@ stringToReg s =
 immediateFromStr :: String -> Immediate
 immediateFromStr s =
    case s of
+        '*':_ -> Tag $ s
         ':':_ -> Tag $ s
         _ -> Integer (read s :: Int)
 
@@ -909,11 +910,16 @@ loadMemory nsegs mem tagMap = do
     
 resolveTags :: Mem -> Map String Int -> Mem
 resolveTags (Mem mem) tagMap =
-    Mem (map (\x -> case x of
-       Inst (Li reg (Tag tag)) -> case Map.lookup tag tagMap of
-        Just n -> Inst (Li reg (Integer n))
-        Nothing -> Inst (Li reg (Integer 0))
-       _ -> x) mem)
+    Mem (map (\(addr, x) -> case x of
+       Inst (Li reg (Tag ('*':tag))) -> 
+           case Map.lookup tag tagMap of
+               Just n -> Inst (Li reg (Integer $ n - addr - 1))
+               Nothing -> Inst (Li reg (Integer 0))
+       Inst (Li reg (Tag tag)) ->
+           case Map.lookup tag tagMap of
+               Just n -> Inst (Li reg (Integer n))
+               Nothing -> Inst (Li reg (Integer 0))
+       _ -> x) (zip [0..] mem))
 
 type CapBound = (Immediate, Immediate, Immediate)
 loadCaps :: Int -> IO [CapBound]
