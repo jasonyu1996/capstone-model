@@ -77,19 +77,18 @@ isValue (Value _) = True
 isValue _ = False
 
 
+isLinear :: MWord -> Bool
+isLinear (Cap (TSealedRet _) b e a p n) = True
+isLinear (Cap t b e a p n) = t `elem` [TLin, TRev, TSealed, TUninit]
+isLinear _ = False
+
 -- Zero out a given word if it is a linear capability
 moved :: MWord -> MWord
 moved w =
-    case w of
-        Cap t b e a p n -> 
-            case t of
-                TSealedRet _ -> Value 0
-                _ -> 
-                    if (t `elem` [TLin, TRev, TSealed, TUninit]) then
-                        Value 0
-                    else
-                        w
-        _ -> w
+    if isLinear w then
+        Value 0
+    else
+        w
 
 getReg :: RegFile -> Reg -> MWord
 getReg regs r =
@@ -338,7 +337,8 @@ execInsn (State regs mem rt idN) (Ld rd rs) =
     let c = getReg regs rs
         w = getMem mem (capCursor c)
     in
-        if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (readableCap c) then
+        if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (readableCap c) &&
+                (not (isLinear w) || (writableCap c)) then
             (State (incrementPC (setReg regs rd w)) (setMem mem (capCursor c) (moved w)) rt idN, "")
         else
             (Error, "Error ld " ++ (show $ Ld rd rs) ++ "\n")
@@ -986,14 +986,11 @@ execLoop timestamp clockInterval st = do
         else  
             execute st
     putStr (if msg == "" then "" else (show timestamp) ++ ": " ++ msg)
-    --putStrLn (show (length (gprs (regs newState))))
-    --putStrLn ((show timestamp) ++ ": " ++ (show newState))
     execLoop (timestamp + 1) clockInterval newState
 
 main :: IO ()
 
 main = do
     (state, clockInterval) <- loadState
-    --putStrLn ("Initial state: " ++ (show state))
     execLoop 1 clockInterval state 
 
