@@ -21,7 +21,8 @@ You can also run it directly with `runghc Emulator.hs`.
 
 The code as well as other configurations should be supplied in the
 standard input. You may check the files in the `tests` folder for
-examples, and pipe them through the standard input:
+examples, and pipe them through the standard input (they are
+out-of-date and do not work any more):
 
     `runghc Emulator.hs < file-to-run`
 
