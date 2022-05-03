@@ -47,7 +47,7 @@ data Immediate = Integer Int | Tag String
 
 data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Jmp Reg | Seal Reg | SealRet Reg Reg | Call Reg Reg | Return Reg Reg | ReturnSealed Reg Reg |
-    Lin Reg | Delin Reg | Drop Reg |
+    Revoke Reg | Delin Reg | Drop Reg |
     Mrev Reg Reg | Tighten Reg Reg | Li Reg Immediate | Add Reg Reg | Sub Reg Reg | Div Reg Reg |
     Mult Reg Reg |
     Le Reg Reg Reg | Eql Reg Reg Reg |
@@ -443,20 +443,20 @@ execInsn (State regs mem rt idN) (ReturnSealed rd rs) =
         else
             (Error, "Error returnsealed: " ++ (show (ci, validCap rt ci)) ++ "\n")
 
--- lin
-execInsn (State regs mem rt idN) (Lin r) =
+-- revoke
+execInsn (State regs mem rt idN) (Revoke r) =
     let c = getReg regs r
         cNode = capNode c
         RevTree rtl = rt
         rtChanged = (RevNode cNode RNLin) `elem` rtl
-        newC = c { capType = if rtChanged then TUninit else TLin }
+        newC = c { capType = if rtChanged && (writableCap c) then TUninit else TLin }
         newRegs = setReg regs r newC
         newRt = reparent rt cNode RevNodeNull 
     in
         if (validCap rt c) && (capType c) == TRev then
             (State (incrementPC newRegs) mem newRt idN, "")
         else
-            (Error, "Error lin\n")
+            (Error, "Error revoke\n")
 
 -- delin
 execInsn (State regs mem rt idN) (Delin r) =
@@ -872,7 +872,7 @@ loadWordAt addr nwords mem tagMap = do
                         "call" -> Call r1 r2
                         "ret" -> Return r1 r2
                         "retsl" -> ReturnSealed r1 r2
-                        "lin" -> Lin r1
+                        "revoke" -> Revoke r1
                         "delin" -> Delin r1
                         "drop" -> Drop r1
                         "mrev" -> Mrev r1 r2
