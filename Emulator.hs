@@ -11,7 +11,7 @@ type Addr = Int
 data Perm = PermNA | PermR | PermRW | PermRX | PermRWX
     deriving (Eq, Show)
 
-data Reg = Pc | Sc | Epc | Ret | GPR Int
+data Reg = Pc | Epc | Ret | GPR Int
     deriving (Eq, Show)
 
 data MWord = Cap {
@@ -27,7 +27,7 @@ data MWord = Cap {
 data RegFile = RegFile {
     pc :: MWord,
     domId :: MWord,
-    sc :: MWord,
+    --sc :: MWord,
     epc :: MWord,
     ret :: MWord,
     gprs :: [MWord]
@@ -94,7 +94,6 @@ getReg :: RegFile -> Reg -> MWord
 getReg regs r =
     case r of
         Pc -> pc regs
-        Sc -> sc regs
         Epc -> epc regs
         Ret -> ret regs
         GPR n -> (gprs regs) !! n
@@ -103,7 +102,6 @@ setReg :: RegFile -> Reg -> MWord -> RegFile
 setReg regs r w =
     case r of
         Pc -> regs { pc = w }
-        Sc -> regs { sc = w }
         Epc -> regs { epc = w }
         Ret -> regs { ret = w }
         -- trick to replace an individual element by its index
@@ -260,7 +258,8 @@ rABHelper (State regs mem rt idN) rd ra rb f =
 callHelper :: State -> Reg -> MWord -> (State, String)
 callHelper (State regs mem rt idN) r arg =
     let ci = getReg regs r
-        co = getReg regs Sc  -- sc is not necessarily a sealed capability
+        co = ci
+        --co = getReg regs Sc  -- sc is not necessarily a sealed capability
         bi = capBase ci
         ei = capEnd ci
         bo = capBase co
@@ -268,7 +267,7 @@ callHelper (State regs mem rt idN) r arg =
         gprSize = length (gprs regs)
         newRegs = RegFile {
             pc = getMem mem bi,
-            sc = ci { capType = TLin },
+            --sc = ci { capType = TLin },
             domId = getMem mem $ bi + 1,
             epc = if r == Epc then getMem mem $ bi + 2 else epc regs,
             ret = co { capType = TSealedRet r } ,  -- we do not load the ret from the sc region upon call
@@ -278,7 +277,7 @@ callHelper (State regs mem rt idN) r arg =
         mem0 = setMem mem bo (pc regs)
         mem1 = setMem mem0 (bo + 1) (domId regs)
         mem2 = setMem mem1 (bo + 3) (ret regs)
-        newMem = setMemRange mem2 (bo + 4) (gprs regs)
+        newMem = setMemRange mem2 (bo + 4) (gprs $ setReg regs r $ Value 0)
     in
         if (validCap rt ci) && (capType ci) == TSealed &&
             (validCap rt co) && (writableCap co) &&
@@ -296,13 +295,13 @@ returnHelper (State regs mem rt idN) r retval =
         gprSize = length (gprs regs)
         newRegs = setReg (RegFile {
             pc = getMem mem bi,
-            sc = ci { capType = TLin },
+            --sc = ci { capType = TLin },
             domId = getMem mem $ bi + 1,
             epc = if r == Epc then getMem mem $ bi + 2 else epc regs,
             ret = getMem mem $ bi + 3,
             gprs = getMemRange mem (bi + 4) gprSize
         }) rret retval
-        newMem = setMemRange mem bi (replicate (4 + gprSize) (Value 0)) -- clear sc to maintain linearity
+        --newMem = setMemRange mem bi (replicate (4 + gprSize) (Value 0)) -- clear sc to maintain linearity
     in
         if (validCap rt ci) && bi + gprSize + 4 <= ei then
             case capType ci of
@@ -388,7 +387,7 @@ execInsn (State regs mem rt idN) (SealRet rd rs) =
 -- call
 execInsn (State regs mem rt idN) (Call rd rs) =
     let arg = getReg regs rs
-    in callHelper (State (incrementPC regs) mem rt idN) rd arg
+    in callHelper (State (incrementPC $ setReg regs rs $ moved arg) mem rt idN) rd arg
 
 -- except
 execInsn (State regs mem rt idN) (Except r) =
@@ -406,25 +405,43 @@ execInsn (State regs mem rt idN) (Return rd rs) =
 
 -- returnsealed
 execInsn (State regs mem rt idN) (ReturnSealed rd rs) =
-    let Value cursor = getReg regs rs
+    let ci = getReg regs rd
+        bi = capBase ci
+        ei = capEnd ci
+        TSealedRet rret = capType ci
+        gprSize = length (gprs regs)
+
+        Value cursor = getReg regs rs
         newPC = (pc regs) { capCursor = cursor }
-        scCap = sc regs
+        --scCap = sc regs
+        scCap = ci
         scBase = capBase scCap
         scEnd = capEnd scCap
-        gprSize = length $ gprs regs
 
+        regsToSave = setReg regs rd $ Value 0
         mem1 = setMem mem scBase newPC
-        mem2 = setMem mem1 (scBase + 1) (domId regs)
-        mem3 = setMem mem2 (scBase + 2) (epc regs)
-        newMem = setMemRange mem2 (scBase + 4) (gprs regs)
+        mem2 = setMem mem1 (scBase + 1) (domId regsToSave)
+        mem3 = setMem mem2 (scBase + 2) (epc regsToSave)
+        newMem = setMemRange mem2 (scBase + 4) (gprs regsToSave)
 
         retval = scCap { capType = TSealed }
-    in 
-        if (isValue $ getReg regs rs) && (validCap rt scCap) &&
-            (scBase + gprSize + 3 < scEnd) && (writableCap scCap) then
-            returnHelper (State regs newMem rt idN) rd retval
+
+        newRegs = setReg (RegFile {
+            pc = getMem mem bi,
+            --sc = ci { capType = TLin },
+            domId = getMem mem $ bi + 1,
+            epc = if rd == Epc then getMem mem $ bi + 2 else epc regs,
+            ret = getMem mem $ bi + 3,
+            gprs = getMemRange mem (bi + 4) gprSize
+        }) rret retval
+        --newMem = setMemRange mem bi (replicate (4 + gprSize) (Value 0)) -- clear sc to maintain linearity
+    in
+        if (validCap rt ci) && bi + gprSize + 4 <= ei && (isValue $ getReg regs rs) && (validCap rt scCap) then
+            case capType ci of
+                TSealedRet _ -> (State newRegs newMem rt idN, "")
+                _ -> (Error, "Error return: " ++ (show ci) ++ "\n")
         else
-            (Error, "Error returnsealed\n")
+            (Error, "Error returnsealed: " ++ (show (ci, validCap rt ci)) ++ "\n")
 
 -- lin
 execInsn (State regs mem rt idN) (Lin r) =
@@ -812,7 +829,7 @@ stringToReg s =
         "pc" -> Pc
         "ret" -> Ret
         "epc" -> Epc
-        "sc" -> Sc
+        --"sc" -> Sc
         _ -> GPR (read (tail s) :: Int)
 
 
@@ -970,7 +987,7 @@ loadState = do
     regs <- return (RegFile {
         pc = capPC,
         domId = Value 0,
-        sc = Value 0, -- todo need to set this up
+        --sc = Value 0, -- todo need to set this up
         epc = Value 0,
         ret = Value 0,
         gprs = (tail caps) ++ (replicate (gprCount - numCaps) (Value 0))
