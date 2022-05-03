@@ -27,7 +27,6 @@ data MWord = Cap {
 data RegFile = RegFile {
     pc :: MWord,
     domId :: MWord,
-    --sc :: MWord,
     epc :: MWord,
     ret :: MWord,
     gprs :: [MWord]
@@ -54,8 +53,8 @@ data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Lt Reg Reg Reg | Jnz Reg Reg | Jz Reg Reg | Split Reg Reg Reg | Splitl Reg Reg Reg | 
     Splito Reg Reg Reg | Splitlo Reg Reg Reg | 
     Shrink Reg Reg Reg |
-    Init Reg | Scc Reg Reg | Lcc Reg Reg |Lce Reg Reg |  Lcb Reg Reg | Lcn Reg Reg | Out Reg | Halt | Except Reg |
-    Scco Reg Reg | -- offset variant of scc
+    Init Reg | Scc Reg Reg | Scco Reg Reg | Lcc Reg Reg |Lce Reg Reg |
+    Lcb Reg Reg | Lcn Reg Reg | Out Reg | Halt | Except Reg |
     IsCap Reg Reg | And Reg Reg | Or Reg Reg
     deriving (Show)
 
@@ -253,13 +252,10 @@ rABHelper (State regs mem rt idN) rd ra rb f =
             (State (incrementPC (setReg regs rd $ Value 0)) mem rt idN, "")
 
 -- call helper (shared between call and except)
--- layout of sc region: bo = pc, bo + 1 = id, bo + 2 = epc, bo + 3 = ret, bo + 4 = gprs
--- upon call: load sc from mem, store ret to sc
 callHelper :: State -> Reg -> MWord -> (State, String)
 callHelper (State regs mem rt idN) r arg =
     let ci = getReg regs r
         co = ci
-        --co = getReg regs Sc  -- sc is not necessarily a sealed capability
         bi = capBase ci
         ei = capEnd ci
         bo = capBase co
@@ -267,10 +263,9 @@ callHelper (State regs mem rt idN) r arg =
         gprSize = length (gprs regs)
         newRegs = RegFile {
             pc = getMem mem bi,
-            --sc = ci { capType = TLin },
             domId = getMem mem $ bi + 1,
             epc = if r == Epc then getMem mem $ bi + 2 else epc regs,
-            ret = co { capType = TSealedRet r } ,  -- we do not load the ret from the sc region upon call
+            ret = co { capType = TSealedRet r } ,  
             -- we need to give a sealedret cap for the callee to return
             gprs = arg:(tail (getMemRange mem (bi + 4) gprSize))
         }
@@ -295,13 +290,11 @@ returnHelper (State regs mem rt idN) r retval =
         gprSize = length (gprs regs)
         newRegs = setReg (RegFile {
             pc = getMem mem bi,
-            --sc = ci { capType = TLin },
             domId = getMem mem $ bi + 1,
             epc = if r == Epc then getMem mem $ bi + 2 else epc regs,
             ret = getMem mem $ bi + 3,
             gprs = getMemRange mem (bi + 4) gprSize
         }) rret retval
-        --newMem = setMemRange mem bi (replicate (4 + gprSize) (Value 0)) -- clear sc to maintain linearity
     in
         if (validCap rt ci) && bi + gprSize + 4 <= ei then
             case capType ci of
@@ -413,7 +406,6 @@ execInsn (State regs mem rt idN) (ReturnSealed rd rs) =
 
         Value cursor = getReg regs rs
         newPC = (pc regs) { capCursor = cursor }
-        --scCap = sc regs
         scCap = ci
         scBase = capBase scCap
         scEnd = capEnd scCap
@@ -428,13 +420,11 @@ execInsn (State regs mem rt idN) (ReturnSealed rd rs) =
 
         newRegs = setReg (RegFile {
             pc = getMem mem bi,
-            --sc = ci { capType = TLin },
             domId = getMem mem $ bi + 1,
             epc = if rd == Epc then getMem mem $ bi + 2 else epc regs,
             ret = getMem mem $ bi + 3,
             gprs = getMemRange mem (bi + 4) gprSize
         }) rret retval
-        --newMem = setMemRange mem bi (replicate (4 + gprSize) (Value 0)) -- clear sc to maintain linearity
     in
         if (validCap rt ci) && bi + gprSize + 4 <= ei && (isValue $ getReg regs rs) && (validCap rt scCap) then
             case capType ci of
@@ -481,7 +471,7 @@ execInsn (State regs mem rt idN) (Drop r) =
         cNode = capNode c
         parentNode = getRevNode rt cNode
     in
-        if (validCap rt c) && ((capType c) `elem` [TLin, TRev, TSealed, TUninit]) then -- FIXME: this is temporary: we do not want to allow
+        if (validCap rt c) && ((capType c) `elem` [TLin, TRev, TSealed, TUninit]) then
             -- uninitialised capabilities to be dropped
             let newRt = remove (reparent rt cNode parentNode) cNode
                 newRegs = setReg regs r (Value 0)
@@ -821,7 +811,6 @@ readInts =
 -- starting address, size (number of words)
 -- list of words
 -- each word can be a value or an instruction (caps are not loaded)
--- TODO: init program counter with tag
 
 stringToReg :: String -> Reg
 stringToReg s =
@@ -829,7 +818,6 @@ stringToReg s =
         "pc" -> Pc
         "ret" -> Ret
         "epc" -> Epc
-        --"sc" -> Sc
         _ -> GPR (read (tail s) :: Int)
 
 
@@ -987,7 +975,6 @@ loadState = do
     regs <- return (RegFile {
         pc = capPC,
         domId = Value 0,
-        --sc = Value 0, -- todo need to set this up
         epc = Value 0,
         ret = Value 0,
         gprs = (tail caps) ++ (replicate (gprCount - numCaps) (Value 0))
