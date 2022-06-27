@@ -1,7 +1,17 @@
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
+
+
+module Main where
+
+import Prelude hiding (catch)
+
 import Data.Char
 import Data.Map (Map)
 import Data.Bits
 import qualified Data.Map as Map
+import Data.Data
 
 data CapType = TLin | TNon | TRev | TSealed | TSealedRet Reg | TUninit 
     deriving (Eq, Show)
@@ -12,7 +22,7 @@ data Perm = PermNA | PermR | PermRW | PermRX | PermRWX
     deriving (Eq, Show)
 
 data Reg = Pc | Epc | Ret | GPR Int
-    deriving (Eq, Show)
+    deriving (Eq, Show, Typeable, Data)
 
 data MWord = Cap {
     capType :: CapType,
@@ -42,7 +52,7 @@ newtype RevTree = RevTree [RevNode]
     deriving (Show)
 
 data Immediate = Integer Int | Tag String
-    deriving (Show)
+    deriving (Show, Typeable, Data)
 
 data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Jmp Reg | Seal Reg | SealRet Reg Reg | Call Reg Reg | Return Reg Reg | ReturnSealed Reg Reg |
@@ -56,7 +66,7 @@ data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     Init Reg | Scc Reg Reg | Scco Reg Reg | Lcc Reg Reg |Lce Reg Reg |
     Lcb Reg Reg | Lcn Reg Reg | Out Reg | Halt | Except Reg |
     IsCap Reg Reg | And Reg Reg | Or Reg Reg
-    deriving (Show)
+    deriving (Show, Data, Typeable)
 
 newtype Mem = Mem [MWord]
     deriving (Show)
@@ -68,6 +78,12 @@ data State = State {
     idN :: Int -- the last assigned ID
 } | Error
     deriving (Show)
+
+data Stats = Stats {
+    insnCounts :: [Int]
+} deriving (Show)
+
+data StateWithStats = StateWithStats State Stats
 
 -- Helper functions
 
@@ -312,6 +328,15 @@ trap (State regs mem rt idN) arg =
             callHelper (State regs mem rt idN) Epc arg
         else
             (State regs mem rt idN, "")
+
+-- update the instruction counters
+countInsn :: Stats -> Instruction -> Stats
+countInsn stats insn =
+    let insn_op_index = (constrIndex $ toConstr insn) - 1
+        ic = insnCounts stats 
+        updated_ic = (take insn_op_index ic) ++ [(ic !! insn_op_index) + 1] ++ (drop (insn_op_index + 1) ic)
+    in Stats updated_ic
+
 
 -- Instruction definitions
 
@@ -771,19 +796,21 @@ execInsn (State regs mem rt idN) (IsCap rd rs) =
 -- halt
 execInsn (State regs mem rt idN) Halt = (Error, "halted\n")
 
-execute :: State -> (State, String)
-execute Error = (Error, "Error state\n")
-execute (State regs mem rt idN) =
+execute :: StateWithStats -> (StateWithStats, String)
+execute (StateWithStats Error stats) = (StateWithStats Error stats, "Error state\n")
+execute (StateWithStats (State regs mem rt idN) stats) =
     let pcCap = getReg regs Pc
     in
         if (validCap rt pcCap) && (executableCap pcCap) && (inBoundCap pcCap) then
             let w = getMem mem (capCursor pcCap)
             in
                 case w of
-                    Inst insn -> execInsn (State regs mem rt idN) insn
-                    _ -> (Error, "Invalid instruction @ " ++ (show pcCap) ++ ": " ++ (show w) ++ "\n")
+                    Inst insn -> let (s, str) = execInsn (State regs mem rt idN) insn
+                                     sts = countInsn stats insn in
+                       (StateWithStats s sts, str)
+                    _ -> (StateWithStats Error stats, "Invalid instruction @ " ++ (show pcCap) ++ ": " ++ (show w) ++ "\n")
         else
-            (Error, "Invalid PC capability: " ++ (show pcCap) ++ "\n")
+            (StateWithStats Error stats, "Invalid PC capability: " ++ (show pcCap) ++ "\n")
 
 
 -- IO
@@ -982,19 +1009,26 @@ loadState = do
     let rt = RevTree $ replicate (numCaps + 1) RevNodeRoot
     return (State regs (resolveTags mem tagMap) rt 0, clockInterval)
 
-execLoop :: Int -> Int -> State -> IO ()
-execLoop _ _ Error = return ()
-execLoop timestamp clockInterval st = do
-    let (newState, msg) = if (clockInterval > 0) && (mod timestamp clockInterval == 0) then
-            trap st (Value 0) -- 0 for timer interrupt
-        else  
-            execute st
+execLoop :: Int -> Int -> StateWithStats -> IO Stats
+execLoop _ _ (StateWithStats Error stats) = return stats
+execLoop timestamp clockInterval (StateWithStats st stats) = do
+    let (newStateWithStats, msg) = if (clockInterval > 0) && (mod timestamp clockInterval == 0) then
+            let (new_st, str) = trap st (Value 0) in (StateWithStats new_st stats, str) -- 0 for timer interrupt
+        else 
+            execute (StateWithStats st stats)
     putStr (if msg == "" then "" else (show timestamp) ++ ": " ++ msg)
-    execLoop (timestamp + 1) clockInterval newState
+    execLoop (timestamp + 1) clockInterval newStateWithStats
+
+printStats :: Stats -> IO ()
+printStats (Stats ic) = do
+    putStrLn "Instruction counts: "
+    foldMap (\(n, c) -> putStrLn ((show n) ++ "\t\t\t" ++ (show c))) (zip (dataTypeConstrs $ dataTypeOf Halt) ic)
 
 main :: IO ()
 
 main = do
     (state, clockInterval) <- loadState
-    execLoop 1 clockInterval state 
+    stats <- execLoop 1 clockInterval (StateWithStats state (Stats $ replicate (maxConstrIndex $ dataTypeOf Halt) 0))
+    putStrLn "************** Stats **************"
+    printStats stats
 
