@@ -80,7 +80,11 @@ data State = State {
     deriving (Show)
 
 data Stats = Stats {
-    insnCounts :: [Int]
+    insnCounts :: [Int],
+    regWriteCount :: Int,
+    memWriteCount :: Int,
+    capOverwriteCount :: Int -- note that creating capabilities as well as destroying
+            -- capabilities through other means are already included in the instruction counts
 } deriving (Show)
 
 data StateWithStats = StateWithStats State Stats
@@ -334,8 +338,11 @@ countInsn :: Stats -> Instruction -> Stats
 countInsn stats insn =
     let insn_op_index = (constrIndex $ toConstr insn) - 1
         ic = insnCounts stats 
+        owc = capOverwriteCount stats
+        rwc = regWriteCount stats
+        mwc = memWriteCount stats
         updated_ic = (take insn_op_index ic) ++ [(ic !! insn_op_index) + 1] ++ (drop (insn_op_index + 1) ic)
-    in Stats updated_ic
+    in Stats updated_ic rwc mwc owc
 
 
 -- Instruction definitions
@@ -1020,15 +1027,18 @@ execLoop timestamp clockInterval (StateWithStats st stats) = do
     execLoop (timestamp + 1) clockInterval newStateWithStats
 
 printStats :: Stats -> IO ()
-printStats (Stats ic) = do
+printStats (Stats ic rwc mwc owc) = do
     putStrLn "Instruction counts: "
     foldMap (\(n, c) -> putStrLn ((show n) ++ "\t\t\t" ++ (show c))) (zip (dataTypeConstrs $ dataTypeOf Halt) ic)
+    putStrLn $ "Register write count: " ++ (show rwc)
+    putStrLn $ "Memory write count: " ++ (show mwc)
+    putStrLn $ "Capability overwrite count: " ++ (show owc)
 
 main :: IO ()
 
 main = do
     (state, clockInterval) <- loadState
-    stats <- execLoop 1 clockInterval (StateWithStats state (Stats $ replicate (maxConstrIndex $ dataTypeOf Halt) 0))
+    stats <- execLoop 1 clockInterval (StateWithStats state (Stats (replicate (maxConstrIndex $ dataTypeOf Halt) 0) 0 0 0))
     putStrLn "************** Stats **************"
     printStats stats
 
