@@ -89,6 +89,26 @@ data Stats = Stats {
 
 data StateWithStats = StateWithStats State Stats
 
+
+-- update stats after ovewriting a register
+logWriteReg :: Stats -> RegFile -> Reg -> Stats
+logWriteReg stats regs rd =
+    let owc = case getReg regs rd of
+                Cap _ _ _ _ _ _  -> (capOverwriteCount stats) + 1
+                _ -> capOverwriteCount stats
+        rwc = regWriteCount stats
+    in stats { capOverwriteCount = owc, regWriteCount = rwc + 1 }
+
+logWriteMem :: Stats -> Mem -> Int -> Stats
+logWriteMem stats mem addr =
+    let owc = case getMem mem addr of
+                    Cap _ _ _ _ _ _  -> (capOverwriteCount stats) + 1
+                    _ -> capOverwriteCount stats
+        mwc = memWriteCount stats
+    in stats { capOverwriteCount = owc, memWriteCount = mwc + 1 }
+
+
+
 -- Helper functions
 
 isValue :: MWord -> Bool
@@ -236,9 +256,10 @@ lcxHelper (StateWithStats (State regs mem rt idN) stats) rd rs query =
     let c = getReg regs rs
         res = Value (query c)
         newRegs = setReg regs rd res
+        new_stats = logWriteReg stats regs rd
     in
         if validCap rt c then
-            (StateWithStats (State (incrementPC newRegs) mem rt idN) stats, "")
+            (StateWithStats (State (incrementPC newRegs) mem rt idN) new_stats, "")
         else
             (StateWithStats Error stats, "Error lcx\n")
 
@@ -250,9 +271,10 @@ dSHelper (StateWithStats (State regs mem rt idN) stats) rd rs f =
         Value v2 = n2
         res = Value $ f v2 v1
         newRegs = setReg regs rd res
+        new_stats = logWriteReg stats regs rd
     in
         if (isValue n1) && (isValue n2) then
-            (StateWithStats (State (incrementPC newRegs) mem rt idN) stats, "")
+            (StateWithStats (State (incrementPC newRegs) mem rt idN) new_stats, "")
         else
             (StateWithStats Error stats, "Error in DS instruction\n")
 
@@ -265,11 +287,12 @@ rABHelper (StateWithStats (State regs mem rt idN) stats) rd ra rb f =
         Value vb = nb
         res = Value $ f va vb
         newRegs = setReg regs rd res
+        new_stats = logWriteReg stats regs rd
     in
         if (isValue na) && (isValue nb) then
-            (StateWithStats (State (incrementPC newRegs) mem rt idN) stats, "")
+            (StateWithStats (State (incrementPC newRegs) mem rt idN) new_stats, "")
         else
-            (StateWithStats (State (incrementPC (setReg regs rd $ Value 0)) mem rt idN) stats, "")
+            (StateWithStats (State (incrementPC (setReg regs rd $ Value 0)) mem rt idN) new_stats, "")
 
 -- call helper (shared between call and except)
 callHelper :: StateWithStats -> Reg -> MWord -> (StateWithStats, String)
@@ -345,23 +368,6 @@ countInsn stats insn =
     in Stats updated_ic rwc mwc owc
 
 
--- update stats after ovewriting a register
-logWriteReg :: Stats -> RegFile -> Reg -> Stats
-logWriteReg stats regs rd =
-    let owc = case getReg regs rd of
-                Cap _ _ _ _ _ _  -> (capOverwriteCount stats) + 1
-                _ -> capOverwriteCount stats
-        rwc = regWriteCount stats
-    in stats { capOverwriteCount = owc, regWriteCount = rwc + 1 }
-
-logWriteMem :: Stats -> Mem -> Int -> Stats
-logWriteMem stats mem addr =
-    let owc = case getMem mem addr of
-                    Cap _ _ _ _ _ _  -> (capOverwriteCount stats) + 1
-                    _ -> capOverwriteCount stats
-        mwc = memWriteCount stats
-    in stats { capOverwriteCount = owc, memWriteCount = mwc + 1 }
-
 -- Instruction definitions
 
 execInsn :: StateWithStats -> Instruction -> (StateWithStats, String)
@@ -369,20 +375,20 @@ execInsn (StateWithStats Error stats) _ = (StateWithStats Error stats, "Error st
 
 -- mov
 execInsn (StateWithStats (State regs mem rt idN) stats) (Mov rd rs) =
-    (StateWithStats (State (incrementPC (setReg (setReg regs rd w) rs (moved w))) mem rt idN) stats_, "")
+    (StateWithStats (State (incrementPC (setReg (setReg regs rd w) rs (moved w))) mem rt idN) new_stats, "")
     where
         w = getReg regs rs 
-        stats_ = logWriteReg stats regs rd
+        new_stats = logWriteReg stats regs rd
 
 -- ld
 execInsn (StateWithStats (State regs mem rt idN) stats) (Ld rd rs) =
     let c = getReg regs rs
         w = getMem mem (capCursor c)
-        stats_ = logWriteReg stats regs rd
+        new_stats = logWriteReg stats regs rd
     in
         if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (readableCap c) &&
                 (not (isLinear w) || (writableCap c)) then
-            (StateWithStats (State (incrementPC (setReg regs rd w)) (setMem mem (capCursor c) (moved w)) rt idN) stats_, "")
+            (StateWithStats (State (incrementPC (setReg regs rd w)) (setMem mem (capCursor c) (moved w)) rt idN) new_stats, "")
         else
             (StateWithStats Error stats, "Error ld " ++ (show $ Ld rd rs) ++ "\n")
 
@@ -395,8 +401,8 @@ execInsn (StateWithStats (State regs mem rt idN) stats) (Sd rd rs) =
         if (validCap rt c) && (inBoundCap c) && (accessibleCap c) && (writableCap c) then
             let newRegs = setReg (setReg regs rs (moved w)) rd (updateCursor c)
                 newMem = setMem mem (capCursor c) w
-                stats_ = logWriteMem stats mem (capCursor c)
-            in (StateWithStats (State (incrementPC newRegs) newMem rt idN) stats_, "")
+                new_stats = logWriteMem stats mem (capCursor c)
+            in (StateWithStats (State (incrementPC newRegs) newMem rt idN) new_stats, "")
         else
             (StateWithStats Error stats, "Error sd\n")
 
@@ -408,10 +414,10 @@ execInsn (StateWithStats (State regs mem rt idN) stats) (Seal r) =
         b = capBase c
         newIdN = idN + 1
         newMem = setMem mem (b + 1) (Value newIdN)
-        stats_ = logWriteReg stats regs r
+        new_stats = logWriteReg stats regs r
     in
         if (validCap rt c) && (readableCap c) && (writableCap c) && (capType c) == TLin then
-            (StateWithStats (State (incrementPC newRegs) newMem rt newIdN) stats_, "")
+            (StateWithStats (State (incrementPC newRegs) newMem rt newIdN) new_stats, "")
         else
             (StateWithStats Error stats, "Error seal\n")
 
@@ -423,10 +429,10 @@ execInsn (StateWithStats (State regs mem rt idN) stats) (SealRet rd rs) =
         newIdN = idN + 1
         b = capBase c
         newMem = setMem mem (b + 1) (Value newIdN)
-        stats_ = logWriteReg stats regs rd
+        new_stats = logWriteReg stats regs rd
     in
         if (validCap rt c) && (readableCap c) && (writableCap c) && (capType c) == TLin then
-            (StateWithStats (State (incrementPC newRegs) newMem rt newIdN) stats_, "")
+            (StateWithStats (State (incrementPC newRegs) newMem rt newIdN) new_stats, "")
         else
             (StateWithStats Error stats, "Error seal\n")
     
@@ -434,8 +440,8 @@ execInsn (StateWithStats (State regs mem rt idN) stats) (SealRet rd rs) =
 -- call
 execInsn (StateWithStats (State regs mem rt idN) stats) (Call rd rs) =
     let arg = getReg regs rs
-        stats_ = logWriteReg stats regs rs
-    in callHelper (StateWithStats (State (incrementPC $ setReg regs rs $ moved arg) mem rt idN) stats_) rd arg
+        new_stats = logWriteReg stats regs rs
+    in callHelper (StateWithStats (State (incrementPC $ setReg regs rs $ moved arg) mem rt idN) new_stats) rd arg
 
 -- except
 execInsn (StateWithStats (State regs mem rt idN) stats) (Except r) =
@@ -827,8 +833,9 @@ execInsn (StateWithStats (State regs mem rt idN) stats) (IsCap rd rs) =
     let c = getReg regs rs
         res = if validCap rt c then 1 else 0
         newRegs = setReg regs rd $ Value res
+        new_stats = logWriteReg stats regs rd
     in
-        (StateWithStats (State (incrementPC newRegs) mem rt idN) stats, "")
+        (StateWithStats (State (incrementPC newRegs) mem rt idN) new_stats, "")
 
 -- halt
 execInsn (StateWithStats (State regs mem rt idN) stats) Halt = (StateWithStats Error stats, "halted\n")
@@ -842,8 +849,8 @@ execute (StateWithStats (State regs mem rt idN) stats) =
             let w = getMem mem (capCursor pcCap)
             in
                 case w of
-                    Inst insn -> let (StateWithStats s stats_, str) = execInsn (StateWithStats (State regs mem rt idN) stats) insn
-                                     sts = countInsn stats_ insn in
+                    Inst insn -> let (StateWithStats s new_stats, str) = execInsn (StateWithStats (State regs mem rt idN) stats) insn
+                                     sts = countInsn new_stats insn in
                        (StateWithStats s sts, str)
                     _ -> (StateWithStats Error stats, "Invalid instruction @ " ++ (show pcCap) ++ ": " ++ (show w) ++ "\n")
         else
