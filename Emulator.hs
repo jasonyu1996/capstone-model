@@ -12,6 +12,8 @@ import Data.Map (Map)
 import Data.Bits
 import qualified Data.Map as Map
 import Data.Data
+import Data.Sequence
+import Data.Foldable
 
 data CapType = TLin | TNon | TRev | TSealed | TSealedRet Reg | TUninit 
     deriving (Eq, Show)
@@ -39,7 +41,7 @@ data RegFile = RegFile {
     domId :: MWord,
     epc :: MWord,
     ret :: MWord,
-    gprs :: [MWord]
+    gprs :: Seq MWord
 } deriving (Show)
 
 data RevNodeType = RNNonLin | RNLin
@@ -48,7 +50,7 @@ data RevNodeType = RNNonLin | RNLin
 data RevNode = RevNode Int RevNodeType | RevNodeRoot | RevNodeNull
     deriving (Show, Eq)
 
-newtype RevTree = RevTree [RevNode]
+newtype RevTree = RevTree (Seq RevNode)
     deriving (Show)
 
 data Immediate = Integer Int | Tag String
@@ -68,7 +70,7 @@ data Instruction = Mov Reg Reg | Ld Reg Reg | Sd Reg Reg |
     IsCap Reg Reg | And Reg Reg | Or Reg Reg
     deriving (Show, Data, Typeable)
 
-newtype Mem = Mem [MWord]
+newtype Mem = Mem (Seq MWord)
     deriving (Show)
 
 data State = State {
@@ -80,7 +82,7 @@ data State = State {
     deriving (Show)
 
 data Stats = Stats {
-    insnCounts :: [Int],
+    insnCounts :: Seq Int,
     regWriteCount :: Int,
     memWriteCount :: Int,
     capOverwriteCount :: Int -- note that creating capabilities as well as destroying
@@ -135,7 +137,7 @@ getReg regs r =
         Pc -> pc regs
         Epc -> epc regs
         Ret -> ret regs
-        GPR n -> (gprs regs) !! n
+        GPR n -> (gprs regs) `index` n
 
 setReg :: RegFile -> Reg -> MWord -> RegFile
 setReg regs r w =
@@ -144,7 +146,7 @@ setReg regs r w =
         Epc -> regs { epc = w }
         Ret -> regs { ret = w }
         -- trick to replace an individual element by its index
-        GPR n -> regs { gprs = (take n oldGPRs) ++ [w] ++ (drop (n + 1) oldGPRs) }
+        GPR n -> regs { gprs = ((Data.Sequence.take n oldGPRs) |> w) >< (Data.Sequence.drop (n + 1) oldGPRs) }
             where oldGPRs = gprs regs
 
 incrementPC :: RegFile -> RegFile
@@ -177,15 +179,15 @@ executableCap c =
 
 getRevNode :: RevTree -> Int -> RevNode
 getRevNode (RevTree rt) n =
-    rt !! n
+    rt `index` n
 
 setRevNode :: RevTree -> Int -> RevNode -> RevTree
 setRevNode (RevTree rtl) n rn =
-    RevTree ((take n rtl) ++ [rn] ++ (drop (n + 1) rtl))
+    RevTree (((Data.Sequence.take n rtl) |> rn) >< (Data.Sequence.drop (n + 1) rtl))
 
 addRevNode :: RevTree -> RevNode -> (RevTree, Int)
 addRevNode (RevTree rtl) rn =
-    (RevTree (rtl ++ [rn]), length rtl)
+    (RevTree (rtl |> rn), Data.Sequence.length rtl)
 
 revokedCap :: RevTree -> RevNode -> Bool
 revokedCap rt rn =
@@ -209,11 +211,11 @@ accessibleCap (Cap t _ _ _ _ _) = t `elem` [TLin, TNon, TUninit]
 
 getMem :: Mem -> Int -> MWord
 getMem (Mem mcontent) n =
-    mcontent !! n
+    mcontent `index` n
 
 setMem :: Mem -> Int -> MWord -> Mem
 setMem (Mem mcontent) n w =
-    Mem ((take n mcontent) ++ [w] ++ (drop (n + 1) mcontent))
+    Mem (((Data.Sequence.take n mcontent) |> w) >< (Data.Sequence.drop (n + 1) mcontent))
 
 permBoundedBy :: Perm -> Perm -> Bool
 permBoundedBy PermNA _ = True
@@ -231,7 +233,7 @@ decodePerm _ = PermNA
 
 reparent :: RevTree -> Int -> RevNode -> RevTree
 reparent (RevTree rtl) n newN =
-    RevTree (map (\x -> if (x == RevNode n RNNonLin) || (x == RevNode n RNLin) then newN else x) rtl)
+    RevTree (mapWithIndex (\_ x -> if (x == RevNode n RNNonLin) || (x == RevNode n RNLin) then newN else x) rtl)
 
 remove :: RevTree -> Int -> RevTree
 remove rt n = setRevNode rt n RevNodeNull
@@ -240,15 +242,15 @@ updateCursor :: MWord -> MWord
 updateCursor (Cap TUninit b e a p n) = Cap TUninit b e (a + 1) p n
 updateCursor w = id w
 
-getMemRange :: Mem -> Int -> Int -> [MWord]
+getMemRange :: Mem -> Int -> Int -> Seq MWord
 getMemRange (Mem meml) b s =
-    take s (drop b meml)
+    Data.Sequence.take s (Data.Sequence.drop b meml)
 
-setMemRange :: Mem -> Int -> [MWord] -> Mem
+setMemRange :: Mem -> Int -> Seq MWord -> Mem
 setMemRange (Mem meml) b s =
-    let l = take b meml
-        r = drop (b + (length s)) meml
-    in Mem (l ++ s ++ r)
+    let l = Data.Sequence.take b meml
+        r = Data.Sequence.drop (b + (Data.Sequence.length s)) meml
+    in Mem (l >< s >< r)
 
 
 lcxHelper :: StateWithStats -> Reg -> Reg -> (MWord -> Int) -> (StateWithStats, String)
@@ -303,14 +305,14 @@ callHelper (StateWithStats (State regs mem rt idN) stats) r arg =
         ei = capEnd ci
         bo = capBase co
         eo = capEnd co
-        gprSize = length (gprs regs)
+        gprSize = Data.Sequence.length (gprs regs)
         newRegs = RegFile {
             pc = getMem mem bi,
             domId = getMem mem $ bi + 1,
             epc = if r == Epc then getMem mem $ bi + 2 else epc regs,
             ret = co { capType = TSealedRet r } ,  
             -- we need to give a sealedret cap for the callee to return
-            gprs = arg:(tail (getMemRange mem (bi + 4) gprSize))
+            gprs = arg <| (Data.Sequence.drop 1 (getMemRange mem (bi + 4) gprSize))
         }
         mem0 = setMem mem bo (pc regs)
         mem1 = setMem mem0 (bo + 1) (domId regs)
@@ -330,7 +332,7 @@ returnHelper (StateWithStats (State regs mem rt idN) stats) r retval =
         bi = capBase ci
         ei = capEnd ci
         TSealedRet rret = capType ci
-        gprSize = length (gprs regs)
+        gprSize = Data.Sequence.length (gprs regs)
         newRegs = setReg (RegFile {
             pc = getMem mem bi,
             domId = getMem mem $ bi + 1,
@@ -364,7 +366,7 @@ countInsn stats insn =
         owc = capOverwriteCount stats
         rwc = regWriteCount stats
         mwc = memWriteCount stats
-        updated_ic = (take insn_op_index ic) ++ [(ic !! insn_op_index) + 1] ++ (drop (insn_op_index + 1) ic)
+        updated_ic = ((Data.Sequence.take insn_op_index ic) |> ((ic `index` insn_op_index) + 1)) >< (Data.Sequence.drop (insn_op_index + 1) ic)
     in Stats updated_ic rwc mwc owc
 
 
@@ -463,7 +465,7 @@ execInsn (StateWithStats (State regs mem rt idN) stats) (ReturnSealed rd rs) =
         bi = capBase ci
         ei = capEnd ci
         TSealedRet rret = capType ci
-        gprSize = length (gprs regs)
+        gprSize = Data.Sequence.length (gprs regs)
 
         Value cursor = getReg regs rs
         newPC = (pc regs) { capCursor = cursor }
@@ -851,7 +853,7 @@ execute (StateWithStats (State regs mem rt idN) stats) =
                 case w of
                     Inst insn -> let (StateWithStats s new_stats, str) = execInsn (StateWithStats (State regs mem rt idN) stats) insn
                                      sts = countInsn new_stats insn in
-                       (StateWithStats s sts, str)
+                          (StateWithStats s sts, str)
                     _ -> (StateWithStats Error stats, "Invalid instruction @ " ++ (show pcCap) ++ ": " ++ (show w) ++ "\n")
         else
             (StateWithStats Error stats, "Invalid PC capability: " ++ (show pcCap) ++ "\n")
@@ -986,7 +988,7 @@ loadMemory nsegs mem tagMap = do
     
 resolveTags :: Mem -> Map String Int -> Mem
 resolveTags (Mem mem) tagMap =
-    Mem (map (\(addr, x) -> case x of
+    Mem (mapWithIndex (\_ (addr, x) -> case x of
        Inst (Li reg (Tag ('*':tag))) -> 
            case Map.lookup tag tagMap of
                Just n -> Inst (Li reg (Integer $ n - addr - 1))
@@ -995,18 +997,18 @@ resolveTags (Mem mem) tagMap =
            case Map.lookup tag tagMap of
                Just n -> Inst (Li reg (Integer n))
                Nothing -> Inst (Li reg (Integer 0))
-       _ -> x) (zip [0..] mem))
+       _ -> x) (Data.Sequence.zip (Data.Sequence.fromList [0..(Data.Sequence.length mem)]) mem))
 
 type CapBound = (Immediate, Immediate, Immediate)
-loadCaps :: Int -> IO [CapBound]
+loadCaps :: Int -> IO (Seq CapBound)
 loadCaps numCaps =
     if numCaps == 0 then
-        return []
+        return Empty
     else do
         line <- getSignificantLine
         immediates <- return (map (\w -> (immediateFromStr w)) (words line))
         moreCaps <- loadCaps $ numCaps - 1
-        return ((immediates !! 0, immediates !! 1, immediates !! 2):moreCaps)
+        return ((immediates !! 0, immediates !! 1, immediates !! 2) <| moreCaps)
 
 intFromImmediate :: Immediate -> Map String Int -> Int
 intFromImmediate imm tagMap = 
@@ -1027,8 +1029,8 @@ loadState = do
     numCaps <- return (inputs !! 3)
     numSegs <- return (inputs !! 4)
     capBounds <- loadCaps $ numCaps + 1
-    (mem, tagMap) <- loadMemory numSegs (Mem (replicate memSize (Value 0))) Map.empty
-    caps <- return (map (\(idx, (base_imm, end_imm, cursor_imm)) ->
+    (mem, tagMap) <- loadMemory numSegs (Mem (Data.Sequence.replicate memSize (Value 0))) Map.empty
+    caps <- return (mapWithIndex (\_ (idx, (base_imm, end_imm, cursor_imm)) ->
         let base = intFromImmediate base_imm tagMap
             end = intFromImmediate end_imm tagMap
             cursor = intFromImmediate cursor_imm tagMap
@@ -1041,16 +1043,16 @@ loadState = do
                 capPerm = PermRWX,
                 capNode = idx
             } 
-        ) (zip [0..] capBounds))
-    capPC <- return $ head caps
+        ) (Data.Sequence.zip (Data.Sequence.fromList [0..(Data.Sequence.length capBounds)]) capBounds))
+    capPC <- return $ caps `index` 0
     regs <- return (RegFile {
         pc = capPC,
         domId = Value 0,
         epc = Value 0,
         ret = Value 0,
-        gprs = (tail caps) ++ (replicate (gprCount - numCaps) (Value 0))
+        gprs = (Data.Sequence.drop 1 caps) <> (Data.Sequence.replicate (gprCount - numCaps) (Value 0))
     })
-    let rt = RevTree $ replicate (numCaps + 1) RevNodeRoot
+    let rt = RevTree $ Data.Sequence.replicate (numCaps + 1) RevNodeRoot
     return (State regs (resolveTags mem tagMap) rt 0, clockInterval)
 
 execLoop :: Int -> Int -> StateWithStats -> IO Stats
@@ -1066,7 +1068,7 @@ execLoop timestamp clockInterval (StateWithStats st stats) = do
 printStats :: Stats -> IO ()
 printStats (Stats ic rwc mwc owc) = do
     putStrLn "Instruction counts: "
-    foldMap (\(n, c) -> putStrLn ((show n) ++ "\t\t\t" ++ (show c))) (zip (dataTypeConstrs $ dataTypeOf Halt) ic)
+    foldMap (\(n, c) -> putStrLn ((show n) ++ "\t\t\t" ++ (show c))) (Prelude.zip (dataTypeConstrs $ dataTypeOf Halt) $ Data.Foldable.toList ic)
     putStrLn $ "Register write count: " ++ (show rwc)
     putStrLn $ "Memory write count: " ++ (show mwc)
     putStrLn $ "Capability overwrite count: " ++ (show owc)
@@ -1075,7 +1077,7 @@ main :: IO ()
 
 main = do
     (state, clockInterval) <- loadState
-    stats <- execLoop 1 clockInterval (StateWithStats state (Stats (replicate (maxConstrIndex $ dataTypeOf Halt) 0) 0 0 0))
+    stats <- execLoop 1 clockInterval (StateWithStats state (Stats (Data.Sequence.replicate (maxConstrIndex $ dataTypeOf Halt) 0) 0 0 0))
     putStrLn "************** Stats **************"
     printStats stats
 
