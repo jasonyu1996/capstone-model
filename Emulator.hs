@@ -146,7 +146,7 @@ setReg regs r w =
         Epc -> regs { epc = w }
         Ret -> regs { ret = w }
         -- trick to replace an individual element by its index
-        GPR n -> regs { gprs = ((Data.Sequence.take n oldGPRs) |> w) >< (Data.Sequence.drop (n + 1) oldGPRs) }
+        GPR n -> regs { gprs = Data.Sequence.update n w oldGPRs }
             where oldGPRs = gprs regs
 
 incrementPC :: RegFile -> RegFile
@@ -183,7 +183,7 @@ getRevNode (RevTree rt) n =
 
 setRevNode :: RevTree -> Int -> RevNode -> RevTree
 setRevNode (RevTree rtl) n rn =
-    RevTree (((Data.Sequence.take n rtl) |> rn) >< (Data.Sequence.drop (n + 1) rtl))
+    RevTree $ Data.Sequence.update n rn rtl
 
 addRevNode :: RevTree -> RevNode -> (RevTree, Int)
 addRevNode (RevTree rtl) rn =
@@ -215,7 +215,7 @@ getMem (Mem mcontent) n =
 
 setMem :: Mem -> Int -> MWord -> Mem
 setMem (Mem mcontent) n w =
-    Mem (((Data.Sequence.take n mcontent) |> w) >< (Data.Sequence.drop (n + 1) mcontent))
+    Mem $ Data.Sequence.update n w mcontent
 
 permBoundedBy :: Perm -> Perm -> Bool
 permBoundedBy PermNA _ = True
@@ -312,7 +312,7 @@ callHelper (StateWithStats (State regs mem rt idN) stats) r arg =
             epc = if r == Epc then getMem mem $ bi + 2 else epc regs,
             ret = co { capType = TSealedRet r } ,  
             -- we need to give a sealedret cap for the callee to return
-            gprs = arg <| (Data.Sequence.drop 1 (getMemRange mem (bi + 4) gprSize))
+            gprs = Data.Sequence.update 0 arg $ getMemRange mem (bi + 4) gprSize
         }
         mem0 = setMem mem bo (pc regs)
         mem1 = setMem mem0 (bo + 1) (domId regs)
@@ -366,7 +366,7 @@ countInsn stats insn =
         owc = capOverwriteCount stats
         rwc = regWriteCount stats
         mwc = memWriteCount stats
-        updated_ic = ((Data.Sequence.take insn_op_index ic) |> ((ic `index` insn_op_index) + 1)) >< (Data.Sequence.drop (insn_op_index + 1) ic)
+        updated_ic = Data.Sequence.update insn_op_index ((ic `index` insn_op_index) + 1) ic
     in Stats updated_ic rwc mwc owc
 
 
